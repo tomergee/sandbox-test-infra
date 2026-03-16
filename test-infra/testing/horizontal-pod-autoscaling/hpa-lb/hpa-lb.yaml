@@ -1,0 +1,26 @@
+{{$deploymentName := (print .DeploymentBaseName "-" .Index)}}
+{{$serviceName := (print .ServiceBaseName "-" .Index)}}
+
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{.Name}}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{$deploymentName}}
+  minReplicas: {{.Replicas}}
+  maxReplicas: {{.Replicas}}
+  metrics:
+  - type: Object
+    object:
+      describedObject:
+        kind: Service
+        name: {{$serviceName}}
+      metric:
+        name: "autoscaling.googleapis.com|gclb-capacity-fullness"
+      target:
+        averageValue: 70
+        type: AverageValue

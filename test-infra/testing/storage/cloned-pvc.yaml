@@ -1,0 +1,20 @@
+{{$CLONED_ACCESS_MODE := DefaultParam .CLONED_PVC_ACCESS_MODE "ReadWriteOnce"}}
+{{$STORAGE_CLASS := DefaultParam .PVC_STORAGE_CLASS "standard-rwo"}}
+{{$CAPACITY := DefaultParam .CAPACITY "10Gi"}}
+
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{.Name}}
+  labels:
+    group: load
+spec:
+  dataSource:
+    name: {{.pvc_name}}
+    kind: PersistentVolumeClaim
+  accessModes:
+    - {{$CLONED_ACCESS_MODE}}
+  storageClassName: {{$STORAGE_CLASS}}
+  resources:
+    requests:
+      storage: {{$CAPACITY}}

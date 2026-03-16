@@ -1,0 +1,44 @@
+{{$ONE_POD_PER_NODE := DefaultParam .CL2_ONE_POD_PER_NODE false}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: {{.group}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      group: {{.group}}
+      app: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: {{.group}}
+        app: {{.Name}}
+    spec:
+      containers:
+      - name: {{.Name}}
+        image: nginx
+        volumeMounts:
+        - mountPath: /test-mnt
+          name: my-volume
+          readOnly: true
+      {{if $ONE_POD_PER_NODE}}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: group
+                    operator: In
+                    values:
+                      - {{.group}}
+              topologyKey: "kubernetes.io/hostname"
+      {{end}}
+      volumes:
+      - name: my-volume
+        persistentVolumeClaim:
+          claimName: {{.pvc_name}}
+          readOnly: true

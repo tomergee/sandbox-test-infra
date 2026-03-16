@@ -1,0 +1,16 @@
+[
+    {
+      "namespace": "test-cxz53-1",
+      "controlledBy": "test-cxz53-1/test-statefulset-2-0",
+      "name": "test-statefulset-2-0-512gas2-f32tt",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-cxz53-1",
+      "controlledBy": "cxz53/test-statefulset-2-0",
+      "name": "test-statefulset-2-0-512gas2-gsdgf",
+      "host": "",
+      "status": "PendingNotScheduled"
+    }
+  ]

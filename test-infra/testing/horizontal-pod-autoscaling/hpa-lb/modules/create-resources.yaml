@@ -1,0 +1,44 @@
+## Input params
+{{$namespaces := .namespaces}}
+{{$lbHttpRoutesPerGateway := .lbHttpRoutesPerGateway}}
+
+
+## Variables
+{{$lbHpaReplicas := DefaultParam .CL2_LB_HPA_REPLICAS 2}}
+{{$lbHpasPerNamespace := DefaultParam .CL2_LB_HPAS_PER_NAMESPACE 1}}
+{{$lbGatewayClass := DefaultParam .CL2_LB_GATEWAY_CLASS "gke-l7-gxlb"}}
+
+
+steps:
+- name: Creating saturation pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: {{$lbHpasPerNamespace}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: lb-deployment
+      objectTemplatePath: hpa-lb/deployment-lb.yaml
+      templateFillMap:
+        Replicas: {{$lbHpaReplicas}}
+    - basename: lb-hpa
+      objectTemplatePath: hpa-lb/hpa-lb.yaml
+      templateFillMap:
+        DeploymentBaseName: lb-deployment
+        ServiceBaseName: lb-service
+        Replicas: {{$lbHpaReplicas}}
+    - basename: lb-service
+      objectTemplatePath: hpa-lb/service-lb.yaml
+    - basename: lb-gateway
+      objectTemplatePath: hpa-lb/gateway-lb.yaml
+      templateFillMap:
+        GatewayClass: {{$lbGatewayClass}}
+  {{range $httpRouteIndex := Loop $lbHttpRoutesPerGateway}}
+    - basename: lb-httproute-{{$httpRouteIndex}}
+      objectTemplatePath: hpa-lb/httproute-lb.yaml
+      templateFillMap:
+        ServiceBaseName: lb-service
+        GatewayBaseName: lb-gateway
+        Path: /foo-{{$httpRouteIndex}}
+  {{end}}

@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.Name}}
+  labels:
+    gkebackup: stateless-workload
+spec:
+  backoffLimit: 5
+  parallelism: 1
+  # Set completions large enough so job controller will keep re-creating Pod
+  # if it is killed by scheduler.
+  # More details: https://github.com/kubernetes/perf-tests/pull/1816
+  completions: 100
+  manualSelector: true
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        gkebackup: stateless-workload
+        name: {{.Name}}
+    spec:
+      containers:
+      - name: {{.Name}}
+        image: k8s.gcr.io/pause:3.1
+        resources:
+          # Keep the CpuRequest/MemoryRequest request equal percentage of 1-core, 4GB node.
+          # For now, we're setting it to 0.5%.
+          requests:
+            cpu: 5m
+            memory: "20M"
+      restartPolicy: OnFailure
+      terminationGracePeriodSeconds: 1
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900

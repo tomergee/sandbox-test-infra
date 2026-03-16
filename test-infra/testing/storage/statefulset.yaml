@@ -1,0 +1,69 @@
+{{$RUN_ON_ARM_NODES := DefaultParam .CL2_RUN_ON_ARM_NODES false}}
+{{$CAPACITY := DefaultParam .CAPACITY "10Gi"}}
+{{$STORAGE_CLASS := DefaultParam .PVC_STORAGE_CLASS "standard-rwo"}}
+{{$ACCESS_MODE := DefaultParam .PVC_ACCESS_MODE "ReadWriteOnce"}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Name}}
+  labels:
+    group: load
+spec:
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      group: load
+      name: {{.Name}}
+  serviceName: {{.Name}}
+  replicas: {{.Replicas}}
+  template:
+    metadata:
+      labels:
+        group: load
+        name: {{.Name}}
+    spec:
+      containers:
+      - name: {{.Name}}
+        image: k8s.gcr.io/pause:3.1
+        ports:
+          - containerPort: 80
+            name: web
+        resources:
+          # Keep the CpuRequest/MemoryRequest request equal percentage of 1-core, 4GB node.
+          # For now we're setting it to 0.5%.
+          requests:
+            cpu: 5m
+            memory: "20M"
+        volumeMounts:
+          - name: storage-pv
+            mountPath: /var/pv
+      terminationGracePeriodSeconds: 1
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      {{if $RUN_ON_ARM_NODES}}
+      - key: "kubernetes.io/arch"
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+      {{end}}
+  # NOTE: PVs created this way should be cleaned-up manually, as deleting the StatefulSet doesn't automatically delete PVs.
+  # To avoid deleting all the PVs at once during namespace deletion, they should be deleted explicitly via Phase.
+  volumeClaimTemplates:
+    - metadata:
+        name: storage-pv
+      spec:
+        accessModes: [ {{$ACCESS_MODE}} ]
+        storageClassName: {{$STORAGE_CLASS}}
+        resources:
+          requests:
+            storage: {{$CAPACITY}}

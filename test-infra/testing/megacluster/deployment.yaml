@@ -1,0 +1,45 @@
+{{$MultipleSvcs := DefaultParam .MultipleSvcs false}}
+{{$group := DefaultParam .group "load"}}
+
+{{$image := .image}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    {{if $MultipleSvcs}}
+    svc: "{{.SvcName}}-{{.Index}}"
+    {{else}}
+    svc: {{.SvcName}}
+    {{end}}
+    group: {{$group}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        {{if $MultipleSvcs}}
+        svc: "{{.SvcName}}-{{.Index}}"
+        {{else}}
+        svc: {{.SvcName}}
+        {{end}}
+        name: {{.Name}}
+        group: {{$group}}
+    spec:
+      nodeSelector:
+        worker-node-pool: "true"
+      containers:
+      - name: {{.Name}}
+        image: {{$image}}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 1327
+          hostPort: 1327
+        resources:
+          requests:
+            cpu: 5m
+            memory: "20M"

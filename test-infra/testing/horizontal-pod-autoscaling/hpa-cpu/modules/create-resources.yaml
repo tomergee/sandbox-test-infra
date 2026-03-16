@@ -1,0 +1,63 @@
+## Input params
+{{$totalPods := .totalPods}}
+{{$bigHPAs := .bigHPAs}}
+{{$bigHPAsPerNamespace := .bigHPAsPerNamespace}}
+{{$bigHPAsNamespaces := .bigHPAsNamespaces}}
+{{$smallHPAs := .smallHPAs}}
+{{$smallHPAsPerNamespace := .smallHPAsPerNamespace}}
+{{$namespaces := .namespaces}}
+
+## Variables
+{{$bigHPAsPods := DivideInt $totalPods 3}}
+{{$bigHPASize := DivideInt $bigHPAsPods $bigHPAs}}
+{{$smallHPAsPods := MultiplyInt (DivideInt $totalPods 3) 2}}
+{{$smallHPASize := DivideInt $smallHPAsPods $smallHPAs}}
+
+
+steps:
+- name: Creating saturation pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$bigHPAsNamespaces}}
+    replicasPerNamespace: {{$bigHPAsPerNamespace}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: big-deployment
+      objectTemplatePath: hpa-cpu/deployment.yaml
+      templateFillMap:
+        Replicas: {{$bigHPASize}}
+        Group: saturation
+        CpuRequest: 1m
+        MemoryRequest: 50M
+    - basename: big-hpa
+      objectTemplatePath: hpa-cpu/hpa.yaml
+      templateFillMap:
+        DeploymentBaseName: big-deployment
+        Replicas: {{$bigHPASize}}
+    - basename: big-vpa
+      objectTemplatePath: hpa-cpu/vpa.yaml
+      templateFillMap:
+        DeploymentBaseName: big-deployment
+  - namespaceRange:
+      min: {{AddInt $bigHPAsNamespaces 1}}
+      max: {{$namespaces}}
+    replicasPerNamespace: {{$smallHPAsPerNamespace}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: small-deployment
+      objectTemplatePath: hpa-cpu/deployment.yaml
+      templateFillMap:
+        Replicas: {{$smallHPASize}}
+        Group: saturation
+        CpuRequest: 10m
+        MemoryRequest: 10M
+    - basename: small-hpa
+      objectTemplatePath: hpa-cpu/hpa.yaml
+      templateFillMap:
+        DeploymentBaseName: small-deployment
+        Replicas: {{$smallHPASize}}
+    - basename: small-vpa
+      objectTemplatePath: hpa-cpu/vpa.yaml
+      templateFillMap:
+        DeploymentBaseName: small-deployment

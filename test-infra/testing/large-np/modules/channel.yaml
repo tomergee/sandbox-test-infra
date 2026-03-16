@@ -1,0 +1,22 @@
+{{$channel := DefaultParam .channel "rapid"}}
+{{$clusterName := DefaultParam .clusterName "test-cluster"}}
+{{$project := DefaultParam .project "<empty project>"}}
+{{$location := DefaultParam .location "us-central1"}}
+
+steps:
+- name: Update channel
+  measurements:
+    - Identifier: ExecCommand
+      Method: Exec
+      Params:
+        command:
+          - gcloud
+          - container
+          - clusters
+          - update
+          - --release-channel={{$channel}}
+          - --project={{$project}}
+          - --region={{$location}}
+          - -q
+          - --verbosity=debug
+          - {{$clusterName}}

@@ -1,0 +1,73 @@
+
+# This test creates 10xNodes pods with lower priority
+# and then the same number of higher priority pods.
+# The cpuRequest is high enough to require preemption of low-prio pods
+# to fit high-prio pods.
+
+# Selected cpuRequest:
+# 1. e2-medium has 940m allocatable CPU.
+# 2. In GKE between 240m and 500m is allocated on each node by system components.
+# 3. Created daemonsets above consume 75m
+# 4. This gives between 365m and 626m available on the node.
+# 5. We create avg 10 pods per node.
+# 6. We pick X value for cpuRequest so that:
+#    * 10 * X < 365m available
+#    * 10 * X (low-prio) + 10 * X (high-prio) > 626m to trigger preemption.
+# Let's use X = 33m
+
+{{$cpuRequest := "33m"}}
+
+steps:
+- name: Creating PriorityClass for preemption test
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: low-prio
+        objectTemplatePath: priorityclass.yaml
+        templateFillMap:
+          Value: 100
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: high-prio
+        objectTemplatePath: priorityclass.yaml
+        templateFillMap:
+          Value: 200
+
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: low-prio
+      create: true
+      minNamespace: 1
+      maxNamespace: 10
+      size: {{.Nodes}}
+      priorityClassName: low-prio-0
+      cpuRequest: {{$cpuRequest}}
+
+# measuring scheduling-throughput happens inside of modules/deployments.yaml and is reported for "high-prio" keyword.
+
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: high-prio
+      create: true
+      delete: true
+      minNamespace: 11
+      maxNamespace: 20
+      size: {{.Nodes}}
+      priorityClassName: high-prio-0
+      cpuRequest: {{$cpuRequest}}
+
+# Cleanup time.
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: low-prio
+      delete: true
+      minNamespace: 1
+      maxNamespace: 10
+      size: {{.Nodes}}
+      priorityClassName: low-prio-0
+      cpuRequest: {{$cpuRequest}}

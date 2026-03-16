@@ -1,0 +1,11 @@
+# Design doc go/ca-pr-dd API specification: go/ca-pr-dd:api-review
+apiVersion: autoscaling.x-k8s.io/v1beta1
+kind: ProvisioningRequest
+metadata:
+  name: {{.Name}}
+spec:
+  provisioningClassName: queued-provisioning.gke.io
+  podSets:
+  - count: {{.PodCount}}
+    podTemplateRef:
+      name: template-{{.Name}}

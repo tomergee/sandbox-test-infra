@@ -1,0 +1,26 @@
+{
+    "secrets": [
+        {"size": 8000, "count": 1},
+        {"size": 1000, "count": 4},
+        {"size": 500, "count": 50},
+        {"size": 100, "count": 100},
+        {"size": 50, "count": 200},
+        {"size": 10, "count": 100}
+    ],
+    "services": [
+        {"size": 8000, "count": 2},
+        {"size": 5000, "count": 3},
+        {"size": 2000, "count": 5},
+        {"size": 1000, "count": 5},
+        {"size": 500, "count": 30},
+        {"size": 50, "count": 150},
+        {"size": 25, "count": 300}
+    ],
+    "cronjobs": [
+        {"size": 400, "count": 2},
+        {"size": 100, "count": 3},
+        {"size": 50, "count": 5},
+        {"size": 10, "count": 150},
+        {"size": 3, "count": 300}
+    ]
+}

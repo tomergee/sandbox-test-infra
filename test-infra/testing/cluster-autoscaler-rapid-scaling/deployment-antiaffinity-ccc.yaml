@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    app: {{.BaseName}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      app: {{.BaseName}}
+  template:
+    metadata:
+      labels:
+        app: {{.BaseName}}
+    spec:
+{{if .UseHTScheduler}}
+      schedulerName: gke.io/high-throughput-scheduler
+{{end}}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - {{.BaseName}}
+            topologyKey: "kubernetes.io/hostname"
+      nodeSelector:
+        cloud.google.com/compute-class: "app-cc-{{.Index}}"
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.10
+        resources:
+          requests:
+            cpu: "{{.CpuRequest}}m"
+            memory: "{{.MemoryRequest}}Mi"

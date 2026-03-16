@@ -1,0 +1,301 @@
+# Test consts
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER true}}
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}}
+{{$ENABLE_CONTAINER_RESTARTS_MEASUREMENT := DefaultParam .CL2_ENABLE_CONTAINER_RESTARTS_MEASUREMENT false}}
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}}
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}}
+{{$ENABLE_TEST_METRICS := DefaultParam .CL2_ENABLE_TEST_METRICS true}}
+
+# Scale up configuration
+{{$SCALE_UP_TIMEOUT := DefaultParam .CL2_SCALE_UP_TIMEOUT "1h"}}
+
+# Scale down empty configuration
+{{$SCALE_DOWN_EMPTY_TIMEOUT := DefaultParam .CL2_SCALE_DOWN_EMPTY_TIMEOUT "1h"}}
+
+# Scale down underutilized configuration
+{{$SCALE_DOWN_UNDERUTILIZED_TEST := DefaultParam .CL2_SCALE_DOWN_UNDERUTILIZED_TEST false}}
+{{$SCALE_DOWN_UNDERUTILIZED_NODE_COUNT := DefaultParam .CL2_SCALE_DOWN_UNDERUTILIZED_NODE_COUNT 10}}
+{{$SCALE_DOWN_UNDERUTILIZED_TIMEOUT := DefaultParam .CL2_SCALE_DOWN_UNDERUTILIZED_TIMEOUT "1h"}}
+{{$SCALE_DOWN_UNDERUTILIZED_TERMINATION_GRACE_PERIOD := DefaultParam .CL2_SCALE_DOWN_UNDERUTILIZED_TERMINATION_GRACE_PERIOD 7}}
+{{$SCALE_DOWN_UNDERUTILIZED_PAUSE_IN_PRESTOP := DefaultParam .CL2_SCALE_DOWN_UNDERUTILIZED_PAUSE_IN_PRESTOP false}}
+
+# Absolute minimum of test cluster node count
+{{$MIN_NODE_COUNT := DefaultParam .CL2_MIN_NODE_COUNT 5}}
+{{$MAX_NODE_COUNT := AddInt $MIN_NODE_COUNT .Nodes}}
+{{$MAX_NODE_COUNT_TWO := AddInt $MAX_NODE_COUNT $MAX_NODE_COUNT}}
+
+# Pod requirements configuration
+{{$POD_CPU := DefaultParam .CL2_POD_CPU 130}}
+{{$POD_RAM := DefaultParam .CL2_POD_RAM 10}}
+{{$POD_INSTANCE_TYPE_SELECTOR := DefaultParam .CL2_POD_INSTANCE_TYPE_SELECTOR "e2-medium"}}
+{{$POD_ENFORCE_ONE_PER_NODE := DefaultParam .CL2_POD_ENFORCE_ONE_PER_NODE false}}
+
+# Pods per node based on configuration
+{{$PODS_PER_NODE := DefaultParam .CL2_PODS_PER_NODE 5}}
+
+# Pod requirements for one-per-node deployment
+# These values are tuned to leave space for a single pod on each node
+{{$ONE_PER_NODE_POD_CPU := MultiplyInt (SubtractInt $PODS_PER_NODE 1) $POD_CPU}}
+{{$ONE_PER_NODE_POD_RAM := MultiplyInt (SubtractInt $PODS_PER_NODE 1) $POD_RAM}}
+
+# Workload configuration
+{{$WORKLOAD_COUNT := DefaultParam .CL2_WORKLOAD_COUNT 5}}
+{{$WORKLOAD_SEPARATION := DefaultParam .CL2_WORKLOAD_SEPARATION true}}
+{{$WORKLOAD_NODES := DivideInt .Nodes $WORKLOAD_COUNT}}
+{{$WORKLOAD_PODS := MultiplyInt $WORKLOAD_NODES $PODS_PER_NODE}}
+
+# Additional test configuration
+{{$SLEEP_AFTER_EXEC_DURATION := DefaultParam .CL2_SLEEP_AFTER_EXEC_DURATION "0s"}}
+{{$AFTER_SLEEP_TIMEOUT := DefaultParam .CL2_AFTER_SLEEP_TIMEOUT "1m"}}
+{{$OPERATION_TIMEOUT := DefaultParam .CL2_OPERATION_TIMEOUT "1h"}}
+{{$NODE_COUNT_ERROR := DefaultParam .CL2_NODE_COUNT_ERROR 0}}
+{{$INFINITY := 1000000}}
+
+name: cluster-autoscaler
+namespace:
+  number: 1
+tuningSets:
+- name: QpsTuningSet
+  QpsLoad:
+    qps: 1
+steps:
+- name: Starting measurements
+  measurements:
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  {{if $ENABLE_TEST_METRICS}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{$CLUSTER_OOMS_IGNORED_PROCESSES}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+
+- name: Wait for warmup nodes removal
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$OPERATION_TIMEOUT}}
+- name: Sleep
+  measurements:
+  - Identifier: WaitAfterScaleDown
+    Method: Sleep
+    Params:
+      duration: {{$SLEEP_AFTER_EXEC_DURATION}}
+- name: Verify node count
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$AFTER_SLEEP_TIMEOUT}}
+- name: Create scale-up deployments
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$WORKLOAD_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$WORKLOAD_PODS}}
+        CpuRequest: {{$POD_CPU}}
+        MemoryRequest: {{$POD_RAM}}
+        InstanceTypeSelector: {{$POD_INSTANCE_TYPE_SELECTOR}}
+        EnforceOnePerNode: {{$POD_ENFORCE_ONE_PER_NODE}}
+        WorkloadSeparation: {{$WORKLOAD_SEPARATION}}
+- name: Wait for scale-up
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $MAX_NODE_COUNT $NODE_COUNT_ERROR}}
+      maxDesiredNodeCount: {{$INFINITY}}
+      timeout: {{$SCALE_UP_TIMEOUT}}
+- name: Delete scale-up deployments
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+- name: Wait for scale-down of empty nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$SCALE_DOWN_EMPTY_TIMEOUT}}
+{{if $SCALE_DOWN_UNDERUTILIZED_TEST}}
+- name: Start waiting for pods
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = ca
+      operationTimeout: {{$OPERATION_TIMEOUT}}
+      countErrorMargin: {{$NODE_COUNT_ERROR}}
+      checkIfPodsAreUpdated: false
+- name: Create one-per-node deployment
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$WORKLOAD_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: one-per-node-deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$WORKLOAD_NODES}}
+        CpuRequest: {{$ONE_PER_NODE_POD_CPU}}
+        MemoryRequest: {{$ONE_PER_NODE_POD_RAM}}
+        InstanceTypeSelector: {{$POD_INSTANCE_TYPE_SELECTOR}}
+        OnePerNode: true
+        WorkloadSeparation: {{$WORKLOAD_SEPARATION}}
+- name: Wait for one-per-node pods
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+- name: Wait to stabilise node-pools
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $MAX_NODE_COUNT $NODE_COUNT_ERROR}}
+      maxDesiredNodeCount: {{AddInt $MAX_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$SCALE_UP_TIMEOUT}}
+- name: Create fill-up deployment
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$WORKLOAD_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$WORKLOAD_NODES}}
+        CpuRequest: {{$POD_CPU}}
+        MemoryRequest: {{$POD_RAM}}
+        InstanceTypeSelector: {{$POD_INSTANCE_TYPE_SELECTOR}}
+        OnePerNode: false
+        WorkloadSeparation: {{$WORKLOAD_SEPARATION}}
+        TerminationGracePeriodSeconds: {{$SCALE_DOWN_UNDERUTILIZED_TERMINATION_GRACE_PERIOD}}
+        PauseInPrestop: {{$SCALE_DOWN_UNDERUTILIZED_PAUSE_IN_PRESTOP}}
+- name: Wait for fill-up pods
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+- name: Delete one-per-node deployment
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: one-per-node-deployment
+      objectTemplatePath: deployment.yaml
+- name: Wait for scale-down of underutilized nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{AddInt (SubtractInt $MAX_NODE_COUNT $SCALE_DOWN_UNDERUTILIZED_NODE_COUNT) $NODE_COUNT_ERROR}}
+      timeout: {{$SCALE_DOWN_UNDERUTILIZED_TIMEOUT}}
+- name: Delete fill-up deployment
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+- name: Wait for scale-down of empty nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: 0
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$SCALE_DOWN_EMPTY_TIMEOUT}}
+{{end}}
+
+- name: Collecting measurements
+  measurements:
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  {{if $ENABLE_TEST_METRICS}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60

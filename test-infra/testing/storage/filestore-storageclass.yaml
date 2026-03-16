@@ -1,0 +1,11 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-filestore
+provisioner: filestore.csi.storage.gke.io
+parameters:
+  tier: enterprise
+  multishare: "true"
+  network: perf-rapid-100
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

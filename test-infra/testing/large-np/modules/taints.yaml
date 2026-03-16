@@ -1,0 +1,22 @@
+{{$nodePool := DefaultParam .nodePool "<empty node pool>"}}
+{{$clusterName := DefaultParam .clusterName "test-cluster"}}
+{{$project := DefaultParam .project "<empty project>"}}
+{{$location := DefaultParam .location "us-west1"}}
+
+steps:
+- name: Taint node pool
+  measurements:
+    - Identifier: ExecCommand
+      Method: Exec
+      Params:
+        command:
+          - gcloud
+          - container
+          - node-pools
+          - update
+          - --node-taints=x=y:PreferNoSchedule
+          - --cluster={{$clusterName}}
+          - --project={{$project}}
+          - --region={{$location}}
+          - -q
+          - {{$nodePool}}

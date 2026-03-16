@@ -1,0 +1,24 @@
+{{$action := .action}}                  # Controls whether to start or gather the measurements. Valid values: "start", "gather".
+{{$StepId := .StepId}}
+steps:
+- name: "{{$action}}PodPeriodicCommand{{$StepId}}"
+  measurements:
+  - identifier: PodPeriodicCommand{{$StepId}}
+    method: PodPeriodicCommand
+    params:
+      action: {{$action}}
+      namespace: kueue-system
+      labelSelector: app=profiler
+      interval: 121s
+      container: profiler
+      failOnCommandError: false
+      failOnExecError: false
+      failOnTimeout: false
+      limit: 1
+      failOnError: true
+      commands:
+      - name: "{{$StepId}}-Profile"
+        command:
+        - "/scripts/profiler.sh"
+        - "--stdout"
+        timeout: 2m

@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: bayer
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: bayer
+        name: {{.Name}}
+    spec:
+      containers:
+      - image: k8s.gcr.io/pause:3.1
+        name: {{.Name}}
+        resources:
+          requests:
+            # What we want to achieve is to have 1 pod per node.
+            # For 15k node tests, we use 2 core nodes, so using
+            # 1.01 CPU request should be a simple way to get there.
+            # Assumption: we use 2 core minions.
+            cpu: 1.01
+            memory: "10M"
+        volumeMounts:
+          - name: configmap
+            mountPath: /var/configmap
+      dnsPolicy: Default
+      terminationGracePeriodSeconds: 1
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      volumes:
+        - name: configmap
+          configMap:
+            name: configmap-{{.Index}}

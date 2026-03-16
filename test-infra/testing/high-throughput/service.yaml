@@ -1,0 +1,14 @@
+{{$HeadlessService := DefaultParam .CL2_ENABLE_HEADLESS_SERVICES false}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{.Name}}
+spec:
+{{if $HeadlessService}}
+  clusterIP: None
+{{end}}
+  selector:
+    svc: {{.Name}}
+  ports:
+  - port: 80
+    targetPort: 80

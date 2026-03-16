@@ -1,0 +1,13 @@
+
+Diff view:
+# Description - Step used to execute create-gcs-fuse-pod-sa.sh
+# Usage - Applied as a 'step' during CL2 test defined in ../test-config.yaml
+steps:
+- name: Create SA
+  measurements:
+  - Identifier: Create SA
+    Method: Exec
+    Params:
+      command:
+      - "bash"
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/storage/gcsfuse-artifacts/scripts/create-gcs-fuse-pod-sa.sh"

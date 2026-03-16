@@ -1,0 +1,31 @@
+# Action
+{{$actionName := .actionName}}
+
+# Networking parameters
+{{$networkName := .networkName}}
+{{$firewallRuleName := .firewallRuleName}}
+{{$ipRangeName := .ipRangeName}}
+{{$needsParallelstoreCleanup := .needsParallelstoreCleanup}}
+{{$needsLustreCleanup := .needsLustreCleanup}}
+
+steps:
+{{if eq .actionName "create"}}
+- name: Setup VPC Peering
+  measurements:
+  - Identifier: SetupVPCPeering
+{{else}}
+- name: Teardown VPC Peering
+  measurements:
+  - Identifier: TeardownVPCPeering
+{{end}}
+    Method: Exec
+    Params:
+      command:
+      - "bash"
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/storage/steps/networking.sh"
+      - {{$actionName}}
+      - {{$networkName}}
+      - {{$firewallRuleName}}
+      - {{$ipRangeName}}
+      - {{$needsParallelstoreCleanup}}
+      - {{$needsLustreCleanup}}

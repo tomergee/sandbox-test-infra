@@ -1,0 +1,158 @@
+# Test parameters.
+
+# No defaulting: these parameters are required.
+{{$name := .CL2_TEST_NAME}}
+{{$pod_counts := StringSplit .CL2_POD_COUNTS}}
+
+{{$baselines := StringSplit (DefaultParam .CL2_POD_BASELINES "0")}}
+{{$compute_class := DefaultParam .CL2_COMPUTE_CLASS "general"}}
+{{$compute_class_lowercase := Lowercase $compute_class}}
+{{$timeouts := StringSplit (DefaultParam .CL2_POD_STARTUP_TIMEOUTS "1h")}}
+{{$enforce_one_pod_per_node := DefaultParam .CL2_POD_ENFORCE_ONE_PER_NODE false}}
+
+# GPU specific settings, required in case of CL2_COMPUTE_CLASS = "Accelerator"
+{{$accelerator_type := DefaultParam .CL2_ACCELERATOR_TYPE ""}}
+{{$accelerator_count := DefaultParam .CL2_ACCELERATOR_COUNT 1}}
+
+# The test measures the time it takes to schedule given $pod_counts on top of
+# $baselines.
+# For example: $pod_counts "1,2" and $baselines "0,5" mean the test will first
+# measure a single pod, then increase the baseline to 5 pods, and then schedule
+# 2 pods more.
+# Each increase of pod count happens in a dedicated namespace to allow querying
+# latency numbers from logs coming from a single test cluster.
+
+name: {{$name}}
+namespace:
+  number: 0
+tuningSets:
+# default is a tuningset that is meant to be used when we don't have any specific requirements on rate of operations.
+- name: default
+  globalQPSLoad:
+    qps: 100
+    burst: 1
+steps:
+{{$total_user_pod_count := 0}}
+{{range $batch, $pod_count := $pod_counts}}
+{{$baseline := $total_user_pod_count}}
+{{if lt $batch (len $baselines)}}{{$baseline = index $baselines $batch}}{{end}}
+{{$timeout := index $timeouts 0}}
+{{if lt $batch (len $timeouts)}}{{$timeout = index $timeouts $batch}}{{end}}
+{{$buffer := SubtractInt $baseline $total_user_pod_count}}
+# If the total user pod count is not equal to the baseline we inject a "buffer",
+# consisting of a separate set of pods. For the sake of the test, we don't care
+# how long it takes to schedule a buffer to reach baseline, only $pod_count
+# scheduled on top of $baseline matters.
+{{if gt $buffer 0}}
+{{$bufferNamespace := printf "buffer%d-%d-%s" $batch $buffer $compute_class_lowercase}}
+- name: Creating namespace {{$bufferNamespace}}
+  phases:
+  - tuningSet: default
+    replicasPerNamespace: 1
+    objectBundle:
+    - basename: {{$bufferNamespace}}
+      objectTemplatePath: namespace.yaml
+      templateFillMap:
+        Name: {{$bufferNamespace}}
+- name: Starting measurement for buffer {{$buffer}} scale up
+  measurements:
+  - Identifier: WaitForBuffer-{{$bufferNamespace}}
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = {{$bufferNamespace}}
+      namespace: {{$bufferNamespace}}-0
+      # Slow buffer creation shouldn't fail the test, 2h should be long enough.
+      operationTimeout: 2h
+      # TODO: Revisit this after https://github.com/kubernetes/perf-tests/issues/1547 is fixed.
+      checkIfPodsAreUpdated: false
+- name: Injecting {{$buffer}} pods to reach baseline of {{$baseline}}
+  phases:
+  - namespaceRange: # Should really use namespaceList here, but clusterloader generates a `-0` suffix even for self-managed namespaces.
+      basename: {{$bufferNamespace}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$buffer}}
+        ComputeClass: {{$compute_class}}
+        Group: {{$bufferNamespace}}
+        AcceleratorType: {{$accelerator_type}}
+        AcceleratorCount: {{$accelerator_count}}
+        EnforceOnePodPerNode: {{$enforce_one_pod_per_node}}
+- name: Waiting for the creation {{$buffer}} buffer pods
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForBuffer-{{$bufferNamespace}}
+    Params:
+      action: gather
+{{end}}
+
+{{$total_user_pod_count = AddInt $baseline $pod_count}}
+{{$namespace := printf "small-%s-to-%d-%s" $baseline $total_user_pod_count $compute_class_lowercase}}
+- name: Creating namespace {{$namespace}}
+  phases:
+  - tuningSet: default
+    replicasPerNamespace: 1
+    objectBundle:
+    - basename: {{$namespace}}
+      objectTemplatePath: namespace.yaml
+      templateFillMap:
+        Name: {{$namespace}}
+- name: Starting pod startup latency measurement in {{$namespace}}
+  measurements:
+  - Identifier: PodStartupLatencyMeasurement-{{$namespace}}
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = {{$namespace}}
+      namespace: {{$namespace}}-0
+      threshold: 2h # Setting threshold to large value in order not to fail the measurement.
+- name: Starting measurement for {{$baseline}} to {{$total_user_pod_count}} scale up
+  measurements:
+  - Identifier: WaitForRunningDeployments-{{$namespace}}
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = {{$namespace}}
+      namespace: {{$namespace}}-0
+      operationTimeout: {{$timeout}}
+      # TODO: Revisit this after https://github.com/kubernetes/perf-tests/issues/1547 is fixed.
+      checkIfPodsAreUpdated: false
+- name: Creating {{$namespace}} deployment
+  phases:
+  - namespaceRange: # Should really use namespaceList here, but clusterloader generates a `-0` suffix even for self-managed namespaces.
+      basename: {{$namespace}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$pod_count}}
+        ComputeClass: {{$compute_class}}
+        Group: {{$namespace}}
+        AcceleratorType: {{$accelerator_type}}
+        AcceleratorCount: {{$accelerator_count}}
+        EnforceOnePodPerNode: {{$enforce_one_pod_per_node}}
+- name: Waiting for the creation of {{$namespace}} pods
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments-{{$namespace}}
+    Params:
+      action: gather
+- name: Gathering pod startup latency for {{$namespace}}
+  measurements:
+  - Identifier: PodStartupLatencyMeasurement-{{$namespace}}
+    Method: PodStartupLatency
+    Params:
+      action: gather
+{{end}} # Matching range $batch, $pod_count := $pod_counts

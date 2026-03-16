@@ -1,0 +1,347 @@
+{
+    "healthy-crons": [
+      {
+        "partial_name": "1Core-2750Replica-24m0s-cron",
+        "job_count": 1,
+        "instance_count": 2750,
+        "cores": 1,
+        "interval-mins": 1440
+      },
+      {
+        "partial_name": "1Core-1Replica-5s-cron",
+        "job_count": 527,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 5
+      },
+      {
+        "partial_name": "1Core-1Replica-24m0s-cron",
+        "job_count": 373,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 1440
+      },
+      {
+        "partial_name": "1Core-1Replica-15s-cron",
+        "job_count": 344,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 15
+      },
+      {
+        "partial_name": "1Core-1Replica-1m0s-cron",
+        "job_count": 340,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 60
+      },
+      {
+        "partial_name": "64Core-1Replica-10s-cron",
+        "job_count": 4,
+        "instance_count": 1,
+        "cores": 64,
+        "interval-mins": 10
+      },
+      {
+        "partial_name": "1Core-100Replica-12h0m0s-cron",
+        "job_count": 2,
+        "instance_count": 100,
+        "cores": 1,
+        "interval-mins": 43200
+      },
+      {
+        "partial_name": "1Core-200Replica-2m0s-cron",
+        "job_count": 1,
+        "instance_count": 200,
+        "cores": 1,
+        "interval-mins": 120
+      },
+      {
+        "partial_name": "4Core-1Replica-1m0s-cron",
+        "job_count": 45,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 60
+      },
+      {
+        "partial_name": "1Core-1Replica-10s-cron",
+        "job_count": 159,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 10
+      },
+      {
+        "partial_name": "1Core-1Replica-30s-cron",
+        "job_count": 111,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 30
+      },
+      {
+        "partial_name": "4Core-1Replica-24m0s-cron",
+        "job_count": 24,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 1440
+      },
+      {
+        "partial_name": "16Core-1Replica-24m0s-cron",
+        "job_count": 6,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 1440
+      },
+      {
+        "partial_name": "1Core-1Replica-2m0s-cron",
+        "job_count": 77,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 120
+      },
+      {
+        "partial_name": "1Core-1Replica-6m0s-cron",
+        "job_count": 56,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 360
+      },
+      {
+        "partial_name": "1Core-1Replica-2h48m0s-cron",
+        "job_count": 56,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 10080
+      },
+      {
+        "partial_name": "4Core-1Replica-6m0s-cron",
+        "job_count": 14,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 360
+      },
+      {
+        "partial_name": "4Core-1Replica-15s-cron",
+        "job_count": 14,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 15
+      },
+      {
+        "partial_name": "16Core-1Replica-5s-cron",
+        "job_count": 3,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 5
+      },
+      {
+        "partial_name": "4Core-1Replica-20s-cron",
+        "job_count": 12,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 20
+      },
+      {
+        "partial_name": "16Core-1Replica-12h0m0s-cron",
+        "job_count": 3,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 43200
+      },
+      {
+        "partial_name": "1Core-1Replica-1s-cron",
+        "job_count": 45,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 1
+      },
+      {
+        "partial_name": "4Core-1Replica-1s-cron",
+        "job_count": 10,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 1
+      },
+      {
+        "partial_name": "1Core-1Replica-4m0s-cron",
+        "job_count": 40,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 240
+      },
+      {
+        "partial_name": "16Core-1Replica-2h48m0s-cron",
+        "job_count": 2,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 10080
+      },
+      {
+        "partial_name": "16Core-1Replica-12m0s-cron",
+        "job_count": 2,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 720
+      },
+      {
+        "partial_name": "16Core-1Replica-15s-cron",
+        "job_count": 2,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 15
+      },
+      {
+        "partial_name": "4Core-4Replica-30s-cron",
+        "job_count": 2,
+        "instance_count": 4,
+        "cores": 4,
+        "interval-mins": 30
+      },
+      {
+        "partial_name": "16Core-1Replica-10s-cron",
+        "job_count": 2,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 10
+      },
+      {
+        "partial_name": "1Core-1Replica-3m0s-cron",
+        "job_count": 29,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 180
+      },
+      {
+        "partial_name": "4Core-1Replica-30s-cron",
+        "job_count": 7,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 30
+      },
+      {
+        "partial_name": "4Core-1Replica-4m0s-cron",
+        "job_count": 7,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 240
+      },
+      {
+        "partial_name": "4Core-1Replica-2h48m0s-cron",
+        "job_count": 7,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 10080
+      },
+      {
+        "partial_name": "1Core-25Replica-1m0s-cron",
+        "job_count": 1,
+        "instance_count": 25,
+        "cores": 1,
+        "interval-mins": 60
+      },
+      {
+        "partial_name": "1Core-1Replica-20s-cron",
+        "job_count": 23,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 20
+      },
+      {
+        "partial_name": "1Core-1Replica-2s-cron",
+        "job_count": 20,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 2
+      },
+      {
+        "partial_name": "4Core-1Replica-3m0s-cron",
+        "job_count": 5,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 180
+      },
+      {
+        "partial_name": "1Core-10Replica-2s-cron",
+        "job_count": 2,
+        "instance_count": 10,
+        "cores": 1,
+        "interval-mins": 2
+      },
+      {
+        "partial_name": "4Core-1Replica-12m0s-cron",
+        "job_count": 5,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 720
+      },
+      {
+        "partial_name": "1Core-3Replica-1h12m0s-cron",
+        "job_count": 6,
+        "instance_count": 3,
+        "cores": 1,
+        "interval-mins": 4320
+      },
+      {
+        "partial_name": "1Core-1Replica-12m0s-cron",
+        "job_count": 17,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 720
+      },
+      {
+        "partial_name": "1Core-1Replica-8m0s-cron",
+        "job_count": 17,
+        "instance_count": 1,
+        "cores": 1,
+        "interval-mins": 480
+      },
+      {
+        "partial_name": "4Core-1Replica-6d2h0m0s-cron",
+        "job_count": 4,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 525600
+      },
+      {
+        "partial_name": "4Core-1Replica-5s-cron",
+        "job_count": 4,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 5
+      },
+      {
+        "partial_name": "16Core-1Replica-1h12m0s-cron",
+        "job_count": 1,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 4320
+      },
+      {
+        "partial_name": "16Core-1Replica-2m0s-cron",
+        "job_count": 1,
+        "instance_count": 1,
+        "cores": 16,
+        "interval-mins": 120
+      },
+      {
+        "partial_name": "1Core-5Replica-15s-cron",
+        "job_count": 3,
+        "instance_count": 5,
+        "cores": 1,
+        "interval-mins": 15
+      },
+      {
+        "partial_name": "1Core-15Replica-15s-cron",
+        "job_count": 1,
+        "instance_count": 15,
+        "cores": 1,
+        "interval-mins": 15
+      },
+      {
+        "partial_name": "4Core-1Replica-8m0s-cron",
+        "job_count": 3,
+        "instance_count": 1,
+        "cores": 4,
+        "interval-mins": 480
+      }
+    ]
+}

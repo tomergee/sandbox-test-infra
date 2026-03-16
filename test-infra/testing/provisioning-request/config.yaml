@@ -1,0 +1,357 @@
+# Scale up configuration
+{{$SCALE_UP_TIMEOUT := DefaultParam .CL2_SCALE_UP_TIMEOUT "1h"}}
+
+# Scale down empty configuration
+{{$SCALE_DOWN_EMPTY_TIMEOUT := DefaultParam .CL2_SCALE_DOWN_EMPTY_TIMEOUT "1h"}}
+
+# Absolute minimum of test cluster node count
+{{$MIN_NODE_COUNT := DefaultParam .CL2_MIN_NODE_COUNT 5}}
+{{$MAX_NODE_COUNT := AddInt $MIN_NODE_COUNT .Nodes}}
+{{$MAX_NODE_COUNT_TWO := AddInt $MAX_NODE_COUNT $MAX_NODE_COUNT}}
+
+# Pod requirements configuration
+{{$POD_CPU := DefaultParam .CL2_POD_CPU 130}}
+{{$POD_RAM := DefaultParam .CL2_POD_RAM 10}}
+{{$POD_GPU := DefaultParam .CL2_POD_GPU 10}}
+{{$POD_MACHINE_FAMILY := DefaultParam .CL2_POD_MACHINE_FAMILY ""}}
+{{$POD_ENFORCE_ONE_PER_NODE := DefaultParam .CL2_POD_ENFORCE_ONE_PER_NODE false}}
+
+# Workload configuration
+{{$POD_COUNT := DefaultParam .CL2_POD_COUNT 1}}
+{{$PROV_REQ_COUNT := DefaultParam .CL2_PROV_REQ_COUNT 1}}
+# https://cloud.google.com/kubernetes-engine/docs/how-to/workload-separation
+{{$WORKLOAD_SEPARATION := DefaultParam .CL2_WORKLOAD_SEPARATION false}}
+
+# Additional test configuration
+{{$OPERATION_TIMEOUT := DefaultParam .CL2_OPERATION_TIMEOUT "1h"}}
+{{$NODE_COUNT_ERROR := DefaultParam .CL2_NODE_COUNT_ERROR 0}}
+{{$INFINITY := 1000000}}
+
+## Feature-gates and configs:
+{{$ALLOWED_SLOW_API_CALLS := DefaultParam .CL2_ALLOWED_SLOW_API_CALLS 0}}
+{{$API_AVAILABILITY_PERCENTAGE_THRESHOLD := DefaultParam .CL2_API_AVAILABILITY_PERCENTAGE_THRESHOLD 99.5}}
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}}
+{{$CUSTOM_API_CALL_THRESHOLDS := DefaultParam .CUSTOM_API_CALL_THRESHOLDS ""}}
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER true}}
+{{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE := DefaultParam .CL2_ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE true}}
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}}
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}}
+{{$NODE_LOCAL_DNS_LATENCY_THRESHOLD := DefaultParam .CL2_NODE_LOCAL_DNS_LATENCY_THRESHOLD "5s"}}
+{{$RESTART_COUNT_THRESHOLD_OVERRIDES:= DefaultParam .RESTART_COUNT_THRESHOLD_OVERRIDES ""}}
+
+name: cluster-autoscaler
+namespace:
+  number: 1
+tuningSets:
+- name: QpsTuningSet
+  QpsLoad:
+    qps: 1
+steps:
+- name: Starting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: start
+      enableViolations: {{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE}}
+      useSimpleLatencyQuery: true
+      summaryName: APIResponsivenessPrometheus_simple
+      allowedSlowCalls: {{$ALLOWED_SLOW_API_CALLS}}
+      customThresholds: {{YamlQuote $CUSTOM_API_CALL_THRESHOLDS 4}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: start
+      pollFrequency: "5s"
+      hostPollTimeoutSeconds: 5
+      threshold: {{$API_AVAILABILITY_PERCENTAGE_THRESHOLD}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{$CLUSTER_OOMS_IGNORED_PROCESSES}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+  - Identifier: ProvReqProcessingLatencySeconds
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Provisioning Request processing latency
+      metricVersion: v1
+      unit: s
+      queries:
+      - name: ProvReqProcessingLatency50p
+        query: histogram_quantile(0.5, sum(rate(cluster_autoscaler_provisioning_request_processing_latency_seconds_bucket[%v])) by (le))
+        requireSamples: true
+      - name: ProvReqProcessingLatency90p
+        query: histogram_quantile(0.9, sum(rate(cluster_autoscaler_provisioning_request_processing_latency_seconds_bucket[%v])) by (le))
+        requireSamples: true
+      - name: ProvReqProcessingLatency99p
+        query: histogram_quantile(0.99, sum(rate(cluster_autoscaler_provisioning_request_processing_latency_seconds_bucket[%v])) by (le))
+        requireSamples: true
+  - Identifier: ProvReqQueueWaitDurationSeconds
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Provisioning Request queue wait duration
+      metricVersion: v1
+      unit: s
+      queries:
+      - name: ProvReqQueueWaitDuration50p
+        query: histogram_quantile(0.5, sum(rate(cluster_autoscaler_provisioning_request_queue_wait_duration_seconds_bucket[%v])) by (le))
+        requireSamples: true
+      - name: ProvReqQueueWaitDuration90p
+        query: histogram_quantile(0.9, sum(rate(cluster_autoscaler_provisioning_request_queue_wait_duration_seconds_bucket[%v])) by (le))
+        requireSamples: true
+      - name: ProvReqQueueWaitDuration99p
+        query: histogram_quantile(0.99, sum(rate(cluster_autoscaler_provisioning_request_queue_wait_duration_seconds_bucket[%v])) by (le))
+        requireSamples: true
+  - Identifier: GCEAPICallsErrorRatio
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: GCE API calls error ratio
+      metricVersion: v1
+      dimensions:
+      - resource
+      - verb
+      unit: ratio
+      queries:
+      - name: APICallsErrorRatio
+        query: sum(rate(cluster_autoscaler_request_latencies_count{status!="200"}[%v])) by (resource, verb) / sum(rate(cluster_autoscaler_request_latencies_count[%v])) by (resource, verb)
+  - Identifier: GCEAPICallLatencySeconds
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: GCE API calls latency
+      metricVersion: v1
+      dimensions:
+      - resource
+      - verb
+      unit: s
+      queries:
+      - name: GCEAPICallLatency50p
+        query: histogram_quantile(0.5, sum(rate(cluster_autoscaler_request_latencies_bucket[%v])) by (le, resource, verb))
+        requireSamples: true
+      - name: GCEAPICallLatency90p
+        query: histogram_quantile(0.9, sum(rate(cluster_autoscaler_request_latencies_bucket[%v])) by (le, resource, verb))
+        requireSamples: true
+      - name: GCEAPICallLatency99p
+        query: histogram_quantile(0.99, sum(rate(cluster_autoscaler_request_latencies_bucket[%v])) by (le, resource, verb))
+        requireSamples: true
+
+- name: Wait for node count to stabilize
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$OPERATION_TIMEOUT}}
+
+- name: Create jobs consuming Provisioning Requests
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$PROV_REQ_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: provreq-job
+      objectTemplatePath: job-consuming-prov-req.yaml
+      templateFillMap:
+        BackoffLimit: 10
+        Completions: {{$POD_COUNT}}
+        Parallelism: {{$POD_COUNT}}
+        CpuRequest: {{$POD_CPU}}
+        MemoryRequest: {{$POD_RAM}}
+        GpuRequest: {{$POD_GPU}}
+        WorkloadSeparation: {{$WORKLOAD_SEPARATION}}
+        PodMachineFamily: {{$POD_MACHINE_FAMILY}}
+        EnforceOnePerNode: {{$POD_ENFORCE_ONE_PER_NODE}}
+- name: Create Pod Templates used by Provisioning Requests
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$PROV_REQ_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: template-provreq-job
+      objectTemplatePath: pod-template.yaml
+      templateFillMap:
+        CpuRequest: {{$POD_CPU}}
+        MemoryRequest: {{$POD_RAM}}
+        GpuRequest: {{$POD_GPU}}
+        WorkloadSeparation: {{$WORKLOAD_SEPARATION}}
+        PodMachineFamily: {{$POD_MACHINE_FAMILY}}
+        EnforceOnePerNode: {{$POD_ENFORCE_ONE_PER_NODE}}
+- name: Create Provisioning Requests
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$PROV_REQ_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: provreq-job
+      objectTemplatePath: prov-req.yaml
+      templateFillMap:
+        PodCount: {{$POD_COUNT}}
+
+- name: Wait for Provisioning Requests to provision capacity
+  measurements:
+  - Identifier: WaitForGenericK8sObjects
+    Method: WaitForGenericK8sObjects
+    Params:
+      objectGroup: autoscaling.x-k8s.io
+      objectVersion: v1beta1
+      objectResource: provisioningrequests
+      timeout: {{$SCALE_UP_TIMEOUT}}
+      successfulConditions: ["Provisioned=True"]
+      failedConditions: ["Failed=True"]
+      minDesiredObjectCount: {{$PROV_REQ_COUNT}}
+      maxFailedObjectCount: 0
+      namespaceRange:
+        min: 1
+        max: 1
+- name: Verify that the scale up did happen and nodes are ready
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $MAX_NODE_COUNT $NODE_COUNT_ERROR}}
+      maxDesiredNodeCount: {{$INFINITY}}
+      timeout: 20m
+
+- name: Delete jobs consuming Provisioning Requests
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: provreq-job
+      objectTemplatePath: job-consuming-prov-req.yaml
+- name: Delete Pod Templates used by Provisioning Requests
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: template-provreq-job
+      objectTemplatePath: pod-template.yaml
+- name: Delete Provisioning Requests
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: provreq-job
+      objectTemplatePath: prov-req.yaml
+
+- name: Wait for scale-down of empty nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR}}
+      timeout: {{$SCALE_DOWN_EMPTY_TIMEOUT}}
+
+- name: Collecting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: gather
+      enableViolations: {{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE}}
+      useSimpleLatencyQuery: true
+      summaryName: APIResponsivenessPrometheus_simple
+      allowedSlowCalls: {{$ALLOWED_SLOW_API_CALLS}}
+      customThresholds: {{YamlQuote $CUSTOM_API_CALL_THRESHOLDS 4}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: gather
+      pollFrequency: "5s"
+      hostPollTimeoutSeconds: 5
+      threshold: {{$API_AVAILABILITY_PERCENTAGE_THRESHOLD}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{$CLUSTER_OOMS_IGNORED_PROCESSES}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+  - Identifier: ProvReqProcessingLatencySeconds
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+  - Identifier: ProvReqQueueWaitDurationSeconds
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+  - Identifier: GCEAPICallsErrorRatio
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      dimensions:
+      - resource
+      - verb
+  - Identifier: GCEAPICallLatencySeconds
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      dimensions:
+      - resource
+      - verb

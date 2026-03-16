@@ -1,0 +1,201 @@
+# -------------------
+# Part 1: The ConfigMap that holds our redesigned profiler script.
+# This script finds the leader, collects CPU and Heap profiles sequentially,
+# and bundles them into a tar.gz archive.
+# -------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: profiler-script-cm
+  namespace: kueue-system
+data:
+  profiler.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    # --- Configuration ---
+    PPROF_PORT="8083"
+    NAMESPACE="kueue-system"
+    # This string is used to identify the correct leader election lease by its name.
+    LEASE_NAME_SUBSTRING="kueue.x-k8s.io"
+    STDOUT_MODE=false
+    # Define a writable output directory inside the container.
+    OUTPUT_DIR="/output"
+
+    # --- Helper Functions ---
+    usage() {
+      echo "Usage: $0 [--stdout]"
+      echo ""
+      echo "Collects CPU and Heap profiles from the leader Kueue controller."
+      echo ""
+      echo "Flags:"
+      echo "  --stdout   - Send the final tar.gz archive to standard output."
+      echo "             Informational messages are sent to stderr."
+    }
+
+    info() {
+        # This function sends informational output to stderr, keeping stdout clean for piping.
+        echo "$@" >&2
+    }
+
+    # --- Argument Parsing ---
+    if [ "${1:-}" == "--stdout" ]; then
+      STDOUT_MODE=true
+    fi
+
+    # --- Main Script Logic ---
+
+    # 1. Find the Leader Pod Name from the lease object by filtering its name.
+    info "Finding leader pod via lease containing '$LEASE_NAME_SUBSTRING' in namespace '$NAMESPACE'..."
+    # This command lists all leases with their holders, greps for the one containing our target string,
+    # and extracts just the holder identity.
+    HOLDER_IDENTITY=$(kubectl get lease -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.holderIdentity}{"\n"}{end}' 2>/dev/null | grep "$LEASE_NAME_SUBSTRING" | cut -f2 || true)
+
+    if [ -z "$HOLDER_IDENTITY" ]; then
+      info "Error: Could not find a lease containing '$LEASE_NAME_SUBSTRING'. Verify a Kueue lease exists and check permissions."
+      exit 1
+    fi
+
+    LEADER_POD_NAME=$(echo "$HOLDER_IDENTITY" | cut -d'_' -f1)
+
+    if [ -z "$LEADER_POD_NAME" ]; then
+      info "Error: Could not parse pod name from holderIdentity '$HOLDER_IDENTITY'."
+      exit 1
+    fi
+    info "Leader pod found: $LEADER_POD_NAME"
+
+    # 2. Get the Leader Pod's IP Address
+    info "Getting IP address for pod '$LEADER_POD_NAME'..."
+    LEADER_POD_IP=$(kubectl get pod "$LEADER_POD_NAME" -n "$NAMESPACE" -o jsonpath='{.status.podIP}' 2>/dev/null)
+
+    if [ -z "$LEADER_POD_IP" ]; then
+      info "Error: Could not get IP for pod '$LEADER_POD_NAME'."
+      exit 1
+    fi
+    info "Leader IP: $LEADER_POD_IP"
+
+    # 3. Create a temporary directory for profiles.
+    TEMP_DIR=$(mktemp -d)
+    # Ensure the temp directory is cleaned up on script exit, failure, or interrupt.
+    trap 'rm -rf -- "$TEMP_DIR"' EXIT
+
+    # 4. Collect Profiles Sequentially.
+    CPU_PROFILE_FILE="${TEMP_DIR}/cpu.pprof"
+    HEAP_PROFILE_FILE="${TEMP_DIR}/heap.pprof"
+    DURATION_SECONDS=30
+
+    info "Collecting CPU profile (${DURATION_SECONDS}s) from leader..."
+    curl -s -o "$CPU_PROFILE_FILE" "http://${LEADER_POD_IP}:${PPROF_PORT}/debug/pprof/profile?seconds=${DURATION_SECONDS}"
+    info "CPU profile collected."
+
+    info "Collecting Heap profile from leader..."
+    curl -s -o "$HEAP_PROFILE_FILE" "http://${LEADER_POD_IP}:${PPROF_PORT}/debug/pprof/heap"
+    info "Heap profile collected."
+
+    # 5. Bundle into a Compressed Archive in the writable output directory.
+    TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+    ARCHIVE_FILE_NAME="profiles_${LEADER_POD_NAME}_${TIMESTAMP}.tar.gz"
+    ARCHIVE_FILE_PATH="${OUTPUT_DIR}/${ARCHIVE_FILE_NAME}"
+
+    info "Bundling profiles into archive: $ARCHIVE_FILE_PATH"
+    # Create the tar archive. -C changes directory into the temp dir to avoid including the full path.
+    tar -cz -C "$TEMP_DIR" -f "$ARCHIVE_FILE_PATH" cpu.pprof heap.pprof
+
+    # 6. Handle Output.
+    if [ "$STDOUT_MODE" = true ]; then
+      # Output the raw binary content of the archive to stdout, then clean up.
+      cat "$ARCHIVE_FILE_PATH"
+      rm "$ARCHIVE_FILE_PATH"
+    else
+      # In normal mode, leave the file and print a success message.
+      info "✅ Success! Profile archive saved to ${ARCHIVE_FILE_PATH}"
+      info "Run 'kubectl cp' to copy this file to your local machine. Example:"
+      info "kubectl cp -n ${NAMESPACE} kueue-profiler-pod:${ARCHIVE_FILE_PATH} ./${ARCHIVE_FILE_NAME}"
+    fi
+---
+# -------------------
+# Part 2: RBAC resources to allow finding the leader lease and pod IP.
+# -------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kueue-profiler-sa
+  namespace: kueue-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kueue-profiler-role
+  namespace: kueue-system
+rules:
+# Permission to get and list leader election leases.
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list"]
+# Permission to get and list pods (to find the leader's IP).
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kueue-profiler-binding
+  namespace: kueue-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kueue-profiler-role
+subjects:
+- kind: ServiceAccount
+  name: kueue-profiler-sa
+  namespace: kueue-system
+---
+# -------------------
+# Part 3: The Profiler Pod
+# FINAL VERSION: Includes a writable emptyDir volume at /output for the profile archives.
+# -------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kueue-profiler-pod
+  namespace: kueue-system
+  labels:
+    app: profiler
+spec:
+  serviceAccountName: kueue-profiler-sa
+  containers:
+    - name: profiler
+      image: golang:1.22
+      command:
+        - /bin/sh
+        - -c
+        - |
+          # The golang image is debian-based, so we can use apt-get.
+          echo "Updating package list and installing dependencies (curl, dnsutils for nslookup)..." >&2
+          apt-get update -qq > /dev/null
+          apt-get install -y -qq curl dnsutils > /dev/null
+
+          # Download and install kubectl
+          echo "Installing kubectl..." >&2
+          curl -s -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+          echo "✅ All tools are ready. Pod is running." >&2
+
+          # Sleep indefinitely to keep the pod alive for exec commands.
+          sleep infinity
+      volumeMounts:
+        - name: script-volume
+          mountPath: /scripts
+        # Mount the writable volume at /output.
+        - name: output-volume
+          mountPath: /output
+  volumes:
+    - name: script-volume
+      configMap:
+        name: profiler-script-cm
+        defaultMode: 0755
+    # This emptyDir volume provides a writable directory for the script's output.
+    - name: output-volume
+      emptyDir: {}

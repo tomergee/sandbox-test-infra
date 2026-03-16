@@ -1,0 +1,115 @@
+# Test parameters.
+{{$namespaces := DefaultParam .CL2_NAMESPACES 1}}
+{{$deployment_size := DefaultParam .CL2_DEPLOYMENT_SIZE 25000}}
+{{$sleep_duration := DefaultParam .CL2_SLEEP_DURATION "120m"}}
+
+name: autogkebilling
+namespace:
+  number: {{$namespaces}}
+tuningSets:
+# default is a tuningset that is meant to be used when we don't have any specific requirements on rate of operations.
+- name: default
+  globalQPSLoad:
+    qps: 100
+    burst: 1
+
+steps:
+- name: Starting measurements
+  measurements:
+  - Identifier: AGBContainersRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+  - Identifier: AGBHeartbeatSuccess
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: AGB heartbeat
+      metricVersion: v1
+      unit: requests
+      queries:
+      - name: NoFailedHeartbeats
+        query: sum(heartbeats{job="auto-gke-billing", success!="true"})
+        requireSamples: false # Not required because we expect all the heartbeats to succeed
+        threshold: 0
+
+- name: Starting measurement for waiting for pods
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = load
+      operationTimeout: 2h
+      # TODO: Revisit this after https://github.com/kubernetes/perf-tests/issues/1547 is fixed.
+      checkIfPodsAreUpdated: false
+
+- name: Creating {{$deployment_size}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: simple-deployment.yaml
+      templateFillMap:
+        Replicas: {{$deployment_size}}
+
+- name: Waiting for the creation of pods
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+    Params:
+      action: gather
+
+- name: Sleep for {{$sleep_duration}}
+  measurements:
+  - Identifier: SleepAfterPodsCreation
+    Method: Sleep
+    Params:
+      duration: {{$sleep_duration}}
+
+- name: Deleting pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: simple-deployment.yaml
+      templateFillMap:
+        Replicas: 0
+
+- name: Waiting for the deletion pods
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+    Params:
+      action: gather
+
+- name: Gathering measurements
+  measurements:
+  - Identifier: AGBContainersRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: 10000 # Preventing restarts of containers other than AGB to fail this measurement.
+      customAllowedRestarts: |
+        - container: auto-gke-billing
+          pod: auto-gke-billing-*
+          namespace: kube-system
+          allowedRestarts: 0
+  - Identifier: AGBHeartbeatSuccess
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true

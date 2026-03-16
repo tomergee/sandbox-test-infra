@@ -1,0 +1,38 @@
+# ==============================================================================
+# Kueue ResourceFlavor Configuration Template
+#
+# This template defines a Kueue ResourceFlavor resource. ResourceFlavors allow
+# ClusterQueues to manage quotas for different types of nodes (e.g., nodes with
+# specific hardware like GPUs, or nodes belonging to specific pools) by matching
+# node labels and taints.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$CompactPlacementNodesOnly := DefaultParam .CompactPlacementNodesOnly false}} # If true, adds a label requirement for compact placement nodes.
+{{$Topology := DefaultParam .Topology ""}}         # Optional: Specifies a topology key for topology-aware scheduling.
+{{$CONFIG_API_VERSION := DefaultParam .CL2_CONFIG_API_VERSION "v1beta1"}} # v1beta2 is supported only in 0.15+
+# ==============================================================================
+# ResourceFlavor Resource Definition
+# ==============================================================================
+apiVersion: kueue.x-k8s.io/{{$CONFIG_API_VERSION}}
+kind: ResourceFlavor
+metadata:
+  name: {{.Name}}
+spec:
+  nodeLabels:
+    worker-node-pool: "true"
+    # Optional: Add requirement for nodes designated for compact placement.
+{{if $CompactPlacementNodesOnly}}
+    compact-node-pools: "true"
+{{end}}
+  tolerations:
+  - key: kueue.x-k8s.io/cq-name
+    operator: Exists
+    effect: NoSchedule
+  # Optional: Specifies a topology key (e.g., "topology.kubernetes.io/zone")
+  # to enable topology-aware scheduling for this flavor.
+{{if $Topology}}
+  topologyName: "{{$Topology}}"
+{{end}}

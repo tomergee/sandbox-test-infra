@@ -1,0 +1,38 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-filestore-80
+provisioner: filestore.csi.storage.gke.io
+parameters:
+  tier: enterprise
+  multishare: "true"
+  network: perf-rapid-100
+  max-volume-size: "128Gi"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-filestore-20
+provisioner: filestore.csi.storage.gke.io
+parameters:
+  tier: enterprise
+  multishare: "true"
+  network: perf-rapid-100
+  max-volume-size: "512Gi"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-filestore-40
+provisioner: filestore.csi.storage.gke.io
+parameters:
+  tier: enterprise
+  multishare: "true"
+  network: perf-rapid-100
+  max-volume-size: "256Gi"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

@@ -1,0 +1,262 @@
+{
+    "healthy-services": [
+      {
+        "partial_name": "16Core-5000Replica",
+        "job_count": 1,
+        "instance_count": 5000,
+        "cores": 16
+      },
+      {
+        "partial_name": "8Core-5000Replica",
+        "job_count": 1,
+        "instance_count": 5000,
+        "cores": 8
+      },
+      {
+        "partial_name": "16Core-1000Replica",
+        "job_count": 2,
+        "instance_count": 1000,
+        "cores": 16
+      },
+      {
+        "partial_name": "8Core-1000Replica",
+        "job_count": 2,
+        "instance_count": 1000,
+        "cores": 8
+      },
+      {
+        "partial_name": "4Core-5000Replica",
+        "job_count": 1,
+        "instance_count": 5000,
+        "cores": 4
+      },
+      {
+        "partial_name": "16Core-500Replica",
+        "job_count": 5,
+        "instance_count": 500,
+        "cores": 16
+      },
+      {
+        "partial_name": "4Core-1000Replica",
+        "job_count": 8,
+        "instance_count": 1000,
+        "cores": 4
+      },
+      {
+        "partial_name": "64Core-100Replica",
+        "job_count": 1,
+        "instance_count": 100,
+        "cores": 64
+      },
+      {
+        "partial_name": "8Core-500Replica",
+        "job_count": 15,
+        "instance_count": 500,
+        "cores": 8
+      },
+      {
+        "partial_name": "16Core-100Replica",
+        "job_count": 31,
+        "instance_count": 100,
+        "cores": 16
+      },
+      {
+        "partial_name": "32Core-100Replica",
+        "job_count": 1,
+        "instance_count": 100,
+        "cores": 32
+      },
+      {
+        "partial_name": "4Core-500Replica",
+        "job_count": 10,
+        "instance_count": 500,
+        "cores": 4
+      },
+      {
+        "partial_name": "8Core-100Replica",
+        "job_count": 34,
+        "instance_count": 100,
+        "cores": 8
+      },
+      {
+        "partial_name": "2Core-1000Replica",
+        "job_count": 2,
+        "instance_count": 1000,
+        "cores": 2
+      },
+      {
+        "partial_name": "16Core-50Replica",
+        "job_count": 27,
+        "instance_count": 50,
+        "cores": 16
+      },
+      {
+        "partial_name": "4Core-100Replica",
+        "job_count": 39,
+        "instance_count": 100,
+        "cores": 4
+      },
+      {
+        "partial_name": "2Core-500Replica",
+        "job_count": 7,
+        "instance_count": 500,
+        "cores": 2
+      },
+      {
+        "partial_name": "32Core-10Replica",
+        "job_count": 2,
+        "instance_count": 10,
+        "cores": 32
+      },
+      {
+        "partial_name": "64Core-10Replica",
+        "job_count": 1,
+        "instance_count": 10,
+        "cores": 64
+      },
+      {
+        "partial_name": "8Core-50Replica",
+        "job_count": 54,
+        "instance_count": 50,
+        "cores": 8
+      },
+      {
+        "partial_name": "2Core-100Replica",
+        "job_count": 15,
+        "instance_count": 100,
+        "cores": 2
+      },
+      {
+        "partial_name": "16Core-10Replica",
+        "job_count": 69,
+        "instance_count": 10,
+        "cores": 16
+      },
+      {
+        "partial_name": "64Core-5Replica",
+        "job_count": 51,
+        "instance_count": 5,
+        "cores": 64
+      },
+      {
+        "partial_name": "4Core-50Replica",
+        "job_count": 51,
+        "instance_count": 50,
+        "cores": 4
+      },
+      {
+        "partial_name": "8Core-10Replica",
+        "job_count": 70,
+        "instance_count": 10,
+        "cores": 8
+      },
+      {
+        "partial_name": "32Core-5Replica",
+        "job_count": 2,
+        "instance_count": 5,
+        "cores": 32
+      },
+      {
+        "partial_name": "4Core-10Replica",
+        "job_count": 124,
+        "instance_count": 10,
+        "cores": 4
+      },
+      {
+        "partial_name": "2Core-50Replica",
+        "job_count": 40,
+        "instance_count": 50,
+        "cores": 2
+      },
+      {
+        "partial_name": "64Core-1Replica",
+        "job_count": 19,
+        "instance_count": 1,
+        "cores": 64
+      },
+      {
+        "partial_name": "16Core-5Replica",
+        "job_count": 24,
+        "instance_count": 5,
+        "cores": 16
+      },
+      {
+        "partial_name": "2Core-10Replica",
+        "job_count": 160,
+        "instance_count": 10,
+        "cores": 2
+      },
+      {
+        "partial_name": "8Core-5Replica",
+        "job_count": 100,
+        "instance_count": 5,
+        "cores": 8
+      },
+      {
+        "partial_name": "32Core-1Replica",
+        "job_count": 25,
+        "instance_count": 1,
+        "cores": 32
+      },
+      {
+        "partial_name": "1Core-50Replica",
+        "job_count": 1,
+        "instance_count": 50,
+        "cores": 1
+      },
+      {
+        "partial_name": "16Core-1Replica",
+        "job_count": 85,
+        "instance_count": 1,
+        "cores": 16
+      },
+      {
+        "partial_name": "4Core-5Replica",
+        "job_count": 102,
+        "instance_count": 5,
+        "cores": 4
+      },
+      {
+        "partial_name": "1Core-10Replica",
+        "job_count": 7,
+        "instance_count": 10,
+        "cores": 1
+      },
+      {
+        "partial_name": "8Core-1Replica",
+        "job_count": 291,
+        "instance_count": 1,
+        "cores": 8
+      },
+      {
+        "partial_name": "2Core-5Replica",
+        "job_count": 66,
+        "instance_count": 5,
+        "cores": 2
+      },
+      {
+        "partial_name": "4Core-1Replica",
+        "job_count": 1419,
+        "instance_count": 1,
+        "cores": 4
+      },
+      {
+        "partial_name": "2Core-1Replica",
+        "job_count": 453,
+        "instance_count": 1,
+        "cores": 2
+      },
+      {
+        "partial_name": "1Core-5Replica",
+        "job_count": 31,
+        "instance_count": 5,
+        "cores": 1
+      },
+      {
+        "partial_name": "1Core-1Replica",
+        "job_count": 452,
+        "instance_count": 1,
+        "cores": 1
+      }
+    ]
+}

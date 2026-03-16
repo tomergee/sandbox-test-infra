@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduler
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: https://localhost:10259/debug/pprof/profile?seconds=10
+      interval: 1m
+    - name: heap
+      url: https://localhost:10259/debug/pprof/heap
+      interval: 1m
+    - name: goroutine
+      url: https://localhost:10259/debug/pprof/goroutine
+      interval: 1m
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kcm
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: https://localhost:10257/debug/pprof/profile?seconds=10
+      interval: 1m
+    - name: heap
+      url: https://localhost:10257/debug/pprof/heap
+      interval: 1m
+    - name: goroutine
+      url: https://localhost:10257/debug/pprof/goroutine
+      interval: 1m
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kspan-proxy
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: http://localhost:3381/debug/pprof/profile?seconds=10
+      interval: 1m
+    - name: heap
+      url: http://localhost:3381/debug/pprof/heap
+      interval: 1m
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apiserver
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: http://localhost/debug/pprof/profile?seconds=10
+      interval: 1m
+      socketpath: /etc/srv/kubernetes/kube-apiserver/debug.socket
+    - name: heap
+      url: http://localhost/debug/pprof/heap
+      interval: 1m
+      socketpath: /etc/srv/kubernetes/kube-apiserver/debug.socket
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-main
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: https://127.0.0.1:2379/debug/pprof/profile?seconds=10
+      interval: 1m
+      pki:
+        cacert: /etc/srv/kubernetes/pki/etcd-apiserver-ca.crt
+        cert: /etc/srv/kubernetes/pki/etcd-apiserver-client.crt
+        key: /etc/srv/kubernetes/pki/etcd-apiserver-client.key
+    - name: heap
+      url: https://127.0.0.1:2379/debug/pprof/heap
+      interval: 1m
+      pki:
+        cacert: /etc/srv/kubernetes/pki/etcd-apiserver-ca.crt
+        cert: /etc/srv/kubernetes/pki/etcd-apiserver-client.crt
+        key: /etc/srv/kubernetes/pki/etcd-apiserver-client.key
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-events
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: https://127.0.0.1:4002/debug/pprof/profile?seconds=10
+      interval: 1m
+      pki:
+        cacert: /etc/srv/kubernetes/pki/etcd-apiserver-ca.crt
+        cert: /etc/srv/kubernetes/pki/etcd-apiserver-client.crt
+        key: /etc/srv/kubernetes/pki/etcd-apiserver-client.key
+    - name: heap
+      url: https://127.0.0.1:4002/debug/pprof/heap
+      interval: 1m
+      pki:
+        cacert: /etc/srv/kubernetes/pki/etcd-apiserver-ca.crt
+        cert: /etc/srv/kubernetes/pki/etcd-apiserver-client.crt
+        key: /etc/srv/kubernetes/pki/etcd-apiserver-client.key
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-autoscaler
+  namespace: scraper
+  labels:
+    pprof-scraper: "true"
+data:
+  config: |
+    - name: cpu
+      url: http://localhost:8085/debug/pprof/profile?seconds=30
+      interval: 1m
+    - name: heap
+      url: http://localhost:8085/debug/pprof/heap
+      interval: 1m
+    - name: trace
+      url: http://localhost:8085/debug/pprof/trace?seconds=30
+      interval: 1m

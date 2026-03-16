@@ -1,0 +1,10 @@
+---
+# Source: tpu-dra-driver/templates/validatingadmissionpolicybinding.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: resourceslices-policy-tpu-dra-driver
+spec:
+  policyName: resourceslices-policy-tpu-dra-driver
+  validationActions: [Deny]
+  # All ResourceSlices are matched.

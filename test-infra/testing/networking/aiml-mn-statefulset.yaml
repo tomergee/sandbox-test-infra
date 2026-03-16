@@ -1,0 +1,52 @@
+{{$Image := DefaultParam .Image "registry.k8s.io/pause:3.9"}}
+{{$NumNets := DefaultParam .CL2_MN_NUM_NET 0 }}
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Name}}
+  labels:
+    group: aiml
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{.Replicas }}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: aiml
+        name: {{.Name}}
+{{ if gt $NumNets 0 }}
+      annotations:
+        networking.gke.io/default-interface: 'eth0'
+        networking.gke.io/interfaces: |
+          [
+            {
+              "interfaceName": "eth0",
+              "network": "default"
+            }
+{{- range $i := Loop $NumNets }}
+{{- $nicIdx := AddInt $i 1 }}
+            ,
+            {
+              "interfaceName": "eth{{$nicIdx}}",
+              "network": "mn-net{{$nicIdx}}"
+            }
+{{- end }}
+          ]
+{{- end }}
+    spec:
+      schedulerName: {{$SchedulerName}}
+      containers:
+      - name: {{.Name}}
+        image: {{$Image}}
+        resources:
+          requests:
+            cpu: 5m
+            memory: "20M"
+      terminationGracePeriodSeconds: 1
+      tolerations:
+serviceName: svc-{{.Name}}

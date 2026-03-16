@@ -1,0 +1,83 @@
+# ==============================================================================
+# Kubernetes LeaderWorkerSet Configuration Template
+#
+# This template defines a LeaderWorkerSet resource, designed for managing
+# tightly coupled groups of pods where one acts as a leader and the others
+# as workers (e.g., for distributed training). It includes integration with
+# Kueue via labels applied to the LeaderWorkerSet itself.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}} # Default CPU request per worker pod.
+{{$MemoryRequest := DefaultParam .MemoryRequest ""}} # Default Memory is no memory
+{{$Size := DefaultParam .Size 10}}             # Number of worker pods per set (group).
+{{$Replicas := DefaultParam .Replicas 10}}      # Number of leader/worker sets (groups) to create.
+{{$BindPort := DefaultParam .BindPort false}}   # If true, bind a specific host port to the container port (less common).
+{{$PriorityClass := .PriorityClass}}           # The Kubernetes PriorityClass name for the pods. Used by Kueue.
+{{$QueueName := .QueueName}}                   # The target Kueue LocalQueue name for this LeaderWorkerSet.
+{{$Group := .Group}}                           # Label value for grouping related resources.
+{{$WorkloadType := .WorkloadType}}             # Label value indicating the type of workload (e.g., "distributed-training").
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}} # Specifies the Kubernetes scheduler to use.
+{{$PreferredTopology := DefaultParam .PreferredTopology ""}}      # Preference for pods to be scheduled within the specified topology domain.
+{{$RequiredTopology := DefaultParam .RequiredTopology ""}}        # Requirement for pods to be scheduled within the specified topology domain.
+{{$PodPayloadSize := DefaultParam .PodPayloadSize "1"}} # Extra payload size in the form of env variable to increase object size
+
+# ==============================================================================
+# LeaderWorkerSet Resource Definition
+# ==============================================================================
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: {{.Name}}
+  labels:
+    {{if $QueueName}}
+    kueue.x-k8s.io/queue-name: {{$QueueName}}
+    kueue.x-k8s.io/priority-class: {{$PriorityClass}} # PriorityClass for the LWS, considered by Kueue
+    {{end}}
+    group: {{$Group}}
+    type: {{$WorkloadType}}
+spec:
+  replicas: {{$Replicas}}
+  leaderWorkerTemplate:
+    size: {{$Size}}
+    workerTemplate:
+      metadata:
+        labels:
+          type: {{$WorkloadType}}
+          group: {{$Group}}
+        annotations:
+          {{if $PreferredTopology}}
+          kueue.x-k8s.io/podset-preferred-topology: {{$PreferredTopology}}
+          {{end}}
+          {{if $RequiredTopology}}
+          kueue.x-k8s.io/podset-required-topology: {{$RequiredTopology}}
+          {{end}}
+      spec:
+        schedulerName: {{$SchedulerName}}
+        automountServiceAccountToken: false
+        nodeSelector:
+          worker-node-pool: "true"
+        tolerations:
+        - key: "workload"
+          operator: "Equal"
+          value: "kueue-workload"
+          effect: "NoExecute"
+        containers:
+        - name: worker
+          env:
+          - name: ENV_VAR
+            value: "{{RandData $PodPayloadSize}}"
+          image: us-docker.pkg.dev/gke-scalability-images/gcr.io/pause:3.0
+{{if $BindPort}}
+          ports:
+          - containerPort: 1328
+            hostPort: 1328
+{{end}}
+          resources:
+            requests:
+              cpu: {{$CpuRequest}}
+              {{if $MemoryRequest}}
+              memory: {{$MemoryRequest}}
+              {{end}}

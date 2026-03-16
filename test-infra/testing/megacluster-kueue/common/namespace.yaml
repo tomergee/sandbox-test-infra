@@ -1,0 +1,23 @@
+# ==============================================================================
+# Kubernetes Namespace Configuration Template
+#
+# This template defines a Kubernetes Namespace resource. Namespaces provide a
+# scope for names and a way to divide cluster resources. This template includes
+# a label indicating it's managed by Kueue.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+# {{.Name}} - The name for the Namespace resource (passed during template execution).
+
+# ==============================================================================
+# Namespace Resource Definition
+# ==============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{.Name}}
+  labels:
+    # Indicates that this namespace is intended to be managed by Kueue.
+    kueue-managed: "true"

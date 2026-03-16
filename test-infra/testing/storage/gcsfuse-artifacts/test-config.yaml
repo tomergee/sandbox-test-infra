@@ -1,0 +1,60 @@
+# Constants
+# Cater for the case where the number of nodes is less than nodes per namespace. See https://github.com/kubernetes/perf-tests/issues/887
+{{$DEPLOYMENT_SIZE := DefaultParam .CL2_DEPLOYMENT_SIZE 30}}
+{{$DEPLOYMENT_PER_NAMESPACE := DefaultParam .DEPLOYMENT_PER_NAMESPACE 1}}
+{{$PRE_TEST_DEPLOYMENT_SIZE := DefaultParam .PRE_TEST_DEPLOYMENT_SIZE 0}}
+{{$PRE_TEST_DEPLOYMENTS_PER_NAMESPACE := DefaultParam .PRE_TEST_DEPLOYMENTS_PER_NAMESPACE 0}}
+{{$ENABLE_POD_STARTUP_LATENCY_MEASUREMENT := DefaultParam .CL2_ENABLE_POD_STARTUP_LATENCY_MEASUREMENT true}}
+
+# Variables
+{{$namespaces := DefaultParam .NAMESPACES 1}}
+
+name: load
+namespace:
+  number: 1
+  prefix: gcsfuse-scale-test
+tuningSets:
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+# TODO(https://github.com/kubernetes/perf-tests/issues/1024): This TuningSet is used only for pod-startup-latency, get rid of it
+# Uniform5qps: for each running phase, use 5 qps.
+- name: Uniform5qps
+  qpsLoad:
+    qps: 5
+# Global100qps: use 100 qps globally:
+# * split equally qps among all running phases
+# * if some phase finishes, other phases will get more qps.
+- name: Global100qps
+  globalQPSLoad:
+    qps: 100
+    burst: 1
+steps:
+- module:
+    path: /steps/create-gcsfuse-sa-steps.yaml
+{{if $ENABLE_POD_STARTUP_LATENCY_MEASUREMENT}}
+- module:
+    path: ../modules/measurements.yaml
+    params:
+      action: start
+{{end}}
+- module:
+    path: /steps/create-pods-steps.yaml
+    params:
+      namespaces: {{$namespaces}}
+      tuningSet: Uniform5qps
+      deploymentSize: {{$DEPLOYMENT_SIZE}}
+      deploymentsPerNamespace: {{$DEPLOYMENT_PER_NAMESPACE}}
+- module:
+    path: /steps/delete-pods-steps.yaml
+    params:
+      namespaces: {{$namespaces}}
+      tuningSet: Uniform5qps
+      deploymentSize: {{$DEPLOYMENT_SIZE}}
+      deploymentsPerNamespace: 0
+{{if $ENABLE_POD_STARTUP_LATENCY_MEASUREMENT}}
+- module:
+    path: ../modules/measurements.yaml
+    params:
+      action: gather
+{{end}}

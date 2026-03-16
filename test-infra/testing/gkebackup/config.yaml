@@ -1,0 +1,119 @@
+{{$NAMESPACES := DefaultParam .NAMESPACES 1}}
+
+# Parameters for backup-restore module.
+
+{{$BACKUP_TIMEOUT := DefaultParam .BACKUP_TIMEOUT "1h"}}
+{{$RESTORE_TIMEOUT := DefaultParam .RESTORE_TIMEOUT "1h"}}
+
+{{$BACKUP_PLAN_NAME := DefaultParam .BACKUP_PLAN_NAME "gke-test-bp"}}
+{{$BACKUP_NAME := DefaultParam .BACKUP_NAME "gke-test-backup"}}
+{{$RESTORE_PLAN_NAME := DefaultParam .RESTORE_PLAN_NAME "gke-test-rp"}}
+{{$RESTORE_NAME := DefaultParam .RESTORE_NAME "gke-test-restore"}}
+{{$EXECUTE_RESTORE := DefaultParam .EXECUTE_RESTORE true}}
+
+# Parameters for configmaps-secrets module.
+
+{{$SMALL_CONFIG_MAP_COUNT := DefaultParam .SMALL_CONFIG_MAP_COUNT 15000}}
+{{$SMALL_SECRET_COUNT := DefaultParam .SMALL_SECRET_COUNT 15000}}
+
+# Parameters for stateless-workloads module.
+
+{{$DAEMON_SETS_PER_NAMESPACE := DefaultParam .DAEMON_SETS_PER_NAMESPACE 1}}
+{{$DEPLOYMENTS_PER_NAMESPACE := DefaultParam .DEPLOYMENTS_PER_NAMESPACE 1}}
+{{$DEPLOYMENT_SIZE := DefaultParam .DEPLOYMENT_SIZE 16}}
+{{$JOBS_PER_NAMESPACE := DefaultParam .JOBS_PER_NAMESPACE 16}}
+
+# Parameters for statefulset-pd module.
+
+{{$HAS_VOLUMES := DefaultParam .HAS_VOLUMES false}}
+
+{{$STATEFUL_SET_SIZE := DefaultParam .STATEFUL_SET_SIZE 16}}
+{{$STATEFUL_SETS_PER_NAMESPACE := DefaultParam .STATEFUL_SETS_PER_NAMESPACE 1}}
+
+name: gkebackup
+namespace:
+  number: {{$NAMESPACES}}
+
+tuningSets:
+- name: Uniform100qps
+  qpsLoad:
+    qps: 100
+
+steps:
+- module:
+    path: /modules/measurements.yaml
+    params:
+      action: start
+
+- module:
+    path: /modules/configmaps-secrets.yaml
+    params:
+      tuningSet: Uniform100qps
+      namespaces: {{$NAMESPACES}}
+      smallConfigMapCount: {{$SMALL_CONFIG_MAP_COUNT}}
+      smallSecretCount: {{$SMALL_SECRET_COUNT}}
+
+- name: Creating PriorityClass for DaemonSets
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Uniform100qps
+    objectBundle:
+    - basename: daemonset-priorityclass
+      objectTemplatePath: daemonset-priorityclass.yaml
+
+- module:
+    path: /modules/stateless-workloads.yaml
+    params:
+      tuningSet: Uniform100qps
+      namespaces: {{$NAMESPACES}}
+      daemonSetsPerNamespace: {{$DAEMON_SETS_PER_NAMESPACE}}
+      deploymentsPerNamespace: {{$DEPLOYMENTS_PER_NAMESPACE}}
+      deploymentSize: {{$DEPLOYMENT_SIZE}}
+      jobsPerNamespace: {{$JOBS_PER_NAMESPACE}}
+
+{{if $HAS_VOLUMES}}
+- name: Creating StorageClass to use standard PD
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Uniform100qps
+    objectBundle:
+    - basename: pd-standard-sc
+      objectTemplatePath: pd-standard-sc.yaml
+
+- module:
+    path: /modules/statefulset-pd.yaml
+    params:
+      tuningSet: Uniform100qps
+      actionName: "create"
+      namespaces: {{$NAMESPACES}}
+      statefulSetSize: {{$STATEFUL_SET_SIZE}}
+      statefulSetsPerNamespace: {{$STATEFUL_SETS_PER_NAMESPACE}}
+{{end}}
+
+- module:
+    path: /modules/backup-restore.yaml
+    params:
+      backupTimeout: {{$BACKUP_TIMEOUT}}
+      restoreTimeout: {{$RESTORE_TIMEOUT}}
+      backupPlanName: {{$BACKUP_PLAN_NAME}}
+      backupName: {{$BACKUP_NAME}}
+      restorePlanName: {{$RESTORE_PLAN_NAME}}
+      restoreName: {{$RESTORE_NAME}}
+      executeRestore: {{$EXECUTE_RESTORE}}
+
+{{if $HAS_VOLUMES}}
+- module:
+    path: /modules/statefulset-pd.yaml
+    params:
+      actionName: "delete"
+      namespaces: {{$NAMESPACES}}
+      tuningSet: Uniform100qps
+      statefulSetSize: {{$STATEFUL_SET_SIZE}}
+      statefulSetsPerNamespace: 0
+      deletePvcsPerNamespace: {{$STATEFUL_SETS_PER_NAMESPACE}}
+{{end}}
+
+- module:
+    path: /modules/measurements.yaml
+    params:
+      action: gather

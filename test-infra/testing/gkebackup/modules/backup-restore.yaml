@@ -1,0 +1,112 @@
+{{$backupTimeout := .backupTimeout}}
+{{$restoreTimeout := .restoreTimeout}}
+
+{{$backupPlanName := .backupPlanName}}
+{{$backupName := .backupName}}
+{{$restorePlanName := .restorePlanName}}
+{{$restoreName := .restoreName}}
+
+{{$executeRestore := .executeRestore}}
+
+steps:
+- name: Create BackupPlan
+  measurements:
+  - Identifier: CreateBackupPlan
+    Method: Exec
+    Params:
+      timeout: {{$backupTimeout}}
+      command:
+      - "bash"
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/gkebackup/steps/backupplan.sh"
+      - {{$backupPlanName}}
+
+- name: Starting Backup timer
+  measurements:
+  - Identifier: BackupTimer
+    Method: Timer
+    Params:
+      action: start
+      label: backup
+
+- name: Create Backup
+  measurements:
+  - Identifier: CreateBackup
+    Method: Exec
+    Params:
+      timeout: {{$backupTimeout}}
+      command:
+      - "bash"
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/gkebackup/steps/backup.sh"
+      - {{$backupPlanName}}
+      - {{$backupName}}
+
+- name: Stopping Backup timer
+  measurements:
+  - Identifier: BackupTimer
+    Method: Timer
+    Params:
+      action: stop
+      label: backup
+
+{{if $executeRestore}}
+- name: Create RestorePlan
+  measurements:
+  - Identifier: CreateRestorePlan
+    Method: Exec
+    Params:
+      timeout: {{$restoreTimeout}}
+      command:
+      - "bash"
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/gkebackup/steps/restoreplan.sh"
+      - {{$backupPlanName}}
+      - {{$backupName}}
+      - {{$restorePlanName}}
+
+- name: Starting Restore timer
+  measurements:
+  - Identifier: RestoreTimer
+    Method: Timer
+    Params:
+      action: start
+      label: restore
+
+- name: Create Restore
+  measurements:
+  - Identifier: CreateRestore
+    Method: Exec
+    Params:
+      timeout: {{$restoreTimeout}}
+      command:
+      - "bash"
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/gkebackup/steps/restore.sh"
+      - {{$backupPlanName}}
+      - {{$backupName}}
+      - {{$restorePlanName}}
+      - {{$restoreName}}
+
+- name: Stopping Restore timer
+  measurements:
+  - Identifier: RestoreTimer
+    Method: Timer
+    Params:
+      action: stop
+      label: restore
+{{end}}
+
+- name: Gathering Backup timer
+  measurements:
+  - Identifier: BackupTimer
+    Method: Timer
+    Params:
+      action: gather
+      label: backup
+
+{{if $executeRestore}}
+- name: Gathering Restore timer
+  measurements:
+  - Identifier: RestoreTimer
+    Method: Timer
+    Params:
+      action: gather
+      label: restore
+{{end}}

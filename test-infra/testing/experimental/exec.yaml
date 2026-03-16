@@ -1,0 +1,16 @@
+# Command to be executed
+{{$EXEC_COMMAND := DefaultParam .CL2_EXEC_COMMAND nil}}
+
+name: exec
+namespace:
+  number: 2
+steps:
+- name: Exec command
+  measurements:
+  - Identifier: ExecCommand
+    Method: Exec
+    Params:
+      command:
+      {{range $EXEC_COMMAND}}
+      - {{.}}
+      {{end}}

@@ -1,0 +1,17 @@
+{{$ACCESS_MODE := DefaultParam .PVC_ACCESS_MODE "ReadWriteOnce"}}
+{{$STORAGE_CLASS := DefaultParam .PVC_STORAGE_CLASS "standard-rwo"}}
+{{$CAPACITY := DefaultParam .CAPACITY "10Gi"}}
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{.Name}}
+  labels:
+    group: {{.group}}
+spec:
+  accessModes:
+    - {{$ACCESS_MODE}}
+  storageClassName: {{$STORAGE_CLASS}}
+  resources:
+    requests:
+      storage: {{$CAPACITY}}

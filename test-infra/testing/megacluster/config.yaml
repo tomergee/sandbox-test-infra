@@ -1,0 +1,188 @@
+# Overridable throughput thresholds
+{{$NUM_DAEMONSETS := DefaultParam .CL2_NUM_DAEMONSETS 4}}
+{{$STATEFULSET_SIZE := DefaultParam .CL2_STATEFULSET_SIZE .Nodes}}
+{{$DEFAULT_QPS := DefaultParam .CL2_DEFAULT_QPS 100}}
+{{$DAEMONSETS_OPERATION_TIMEOUT := DefaultParam .CL2_DAEMONSETS_OPERATION_TIMEOUT "30m"}}
+{{$DAEMONSETS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_DAEMONSETS_THROUGHPUT_THRESHOLD 0}}
+{{$DEPLOYMENTS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_DEPLOYMENTS_THROUGHPUT_THRESHOLD 0}}
+{{$JOBS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_JOBS_THROUGHPUT_THRESHOLD 0}}
+{{$EXEC_COMMAND := DefaultParam .CL2_EXEC_COMMAND nil}}
+{{$UPDATE_COMMAND := DefaultParam .CL2_CLUSTER_UPDATE_EXEC_COMMAND nil}}
+{{$EXEC_TIMEOUT := DefaultParam .CL2_EXEC_TIMEOUT "3600s"}}
+{{$EXEC_RETRIES := DefaultParam .CL2_EXEC_RETRIES 1}}
+{{$EXEC_BACKOFF_DELAY := DefaultParam .CL2_EXEC_BACKOFF_DELAY "1s"}}
+{{$EXIT_AFTER_EXEC := DefaultParam .CL2_EXIT_AFTER_EXEC false}}
+{{$SLEEP_AFTER_EXEC_DURATION := DefaultParam .CL2_SLEEP_AFTER_EXEC_DURATION ""}}
+{{$PAUSE_API_AVAILABILITY_DURING_EXEC := DefaultParam .CL2_PAUSE_API_AVAILABILITY_DURING_EXEC false}}
+
+{{$NUM_SERVICES := DefaultParam .CL2_NUM_SERVICES 1000}}
+{{$NUM_64POD_SERVICES := DefaultParam .CL2_NUM_64POD_SERVICES 460}}
+
+{{$DAEMONSET_MIN_NAMESPACE := 2}} # First namespace is for services
+{{$DAEMONSET_MAX_NAMESPACE := (AddInt 1 $NUM_DAEMONSETS)}} # there is only one namespace for services
+{{$EXTRA_NAMESPACES := 50}} # to simulate having sufficient number of namespaces
+
+{{$NUM_NAMESPACES := (AddInt $DAEMONSET_MAX_NAMESPACE $EXTRA_NAMESPACES 1)}}
+
+{{$OBJECT_IMAGE := DefaultParam .CL2_OBJECT_IMAGE "us-docker.pkg.dev/gke-scalability-images/gcr.io/pause:3.0"}}
+
+name: load
+namespace:
+  number: {{$NUM_NAMESPACES}}
+  deleteStaleNamespaces: true # for experiments
+tuningSets:
+- name: default
+  globalQPSLoad:
+    qps: {{$DEFAULT_QPS}}
+    burst: 1
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+
+steps:
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: start
+      namespaceIdx: {{$NUM_NAMESPACES}}
+      statefulsetSize: {{$STATEFULSET_SIZE}}
+
+- name: Creating PriorityClass for DaemonSets
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: daemonset-priorityclass
+        objectTemplatePath: priorityclass.yaml
+        templateFillMap:
+          Value: 1000000
+
+# Prepare some base state.
+- module:
+    path: modules/daemonsets.yaml
+    params:
+      create: true
+      minNamespace: {{$DAEMONSET_MIN_NAMESPACE}}
+      maxNamespace: {{$DAEMONSET_MAX_NAMESPACE}}
+      throughputThreshold: {{$DAEMONSETS_THROUGHPUT_THRESHOLD}}
+      timeout: {{$DAEMONSETS_OPERATION_TIMEOUT}}
+      image: {{$OBJECT_IMAGE}}
+
+- name: Creating headless service
+  phases:
+  # this must be in all namespaces where the statefulset is created
+  - namespaceRange:
+      min: {{$NUM_NAMESPACES}}
+      max: {{$NUM_NAMESPACES}}
+    replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+    - basename: headless-service
+      objectTemplatePath: headless-service.yaml
+
+# StatefulSets without updating as it takes ages for StatefulSets.
+- module:
+    path: modules/statefulsets.yaml
+    params:
+      basename: statefulset
+      create: true
+      delete: true
+      minNamespace: {{$NUM_NAMESPACES}}
+      maxNamespace: {{$NUM_NAMESPACES}}
+      size: {{$STATEFULSET_SIZE}}
+      image: {{$OBJECT_IMAGE}}
+
+- module:
+    path: modules/services.yaml
+    params:
+      basename: services
+      create: true
+      minNamespace: 1
+      maxNamespace: 1
+      num64PodServices: {{$NUM_64POD_SERVICES}}
+      numTotalServices: {{$NUM_SERVICES}}
+      image: {{$OBJECT_IMAGE}}
+
+
+{{if $UPDATE_COMMAND}}
+- name: Enabling multi-network
+  measurements:
+  - Identifier: MultiNetworkEnablement
+    Method: Exec
+    Params:
+      timeout: {{$EXEC_TIMEOUT}}
+      command:
+      {{range $UPDATE_COMMAND}}
+      - {{.}}
+      {{end}}
+{{end}}
+
+{{if $EXEC_COMMAND}}
+{{if $PAUSE_API_AVAILABILITY_DURING_EXEC}}
+- name: Pausing APIAvailability measurement
+  measurements:
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: pause
+{{end}}
+- name: Executing command (Rolling upgrade of KCP, or removing nodes)
+  measurements:
+  - Identifier: KCPRollingUpgradeOrRemovingNodes
+    Method: Exec
+    Params:
+      timeout: {{$EXEC_TIMEOUT}}
+      retries: {{$EXEC_RETRIES}}
+      backoffDelay: {{$EXEC_BACKOFF_DELAY}}
+      command:
+      {{range $EXEC_COMMAND}}
+      - {{.}}
+      {{end}}
+{{if $PAUSE_API_AVAILABILITY_DURING_EXEC}}
+- name: Unpausing APIAvailability measurement
+  measurements:
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: unpause
+{{end}}
+{{if $SLEEP_AFTER_EXEC_DURATION}}
+- name: Sleep
+  measurements:
+  - Identifier: WaitAfterExec
+    Method: Sleep
+    Params:
+      duration: {{$SLEEP_AFTER_EXEC_DURATION}}
+{{end}}
+{{end}}
+
+{{if not $EXIT_AFTER_EXEC}}
+- module:
+    path: modules/services.yaml
+    params:
+      basename: services
+      delete: true
+      minNamespace: 1
+      maxNamespace: 1
+      num64PodServices: {{$NUM_64POD_SERVICES}}
+      numTotalServices: {{$NUM_SERVICES}}
+      image: {{$OBJECT_IMAGE}}
+
+- module:
+    path: modules/daemonsets.yaml
+    params:
+      delete: true
+      minNamespace: {{$DAEMONSET_MIN_NAMESPACE}}
+      maxNamespace: {{$DAEMONSET_MAX_NAMESPACE}}
+      timeout: {{$DAEMONSETS_OPERATION_TIMEOUT}}
+      image: {{$OBJECT_IMAGE}}
+
+# We leak priorityclass objects. CL2 will remove them as part of test teardown.
+{{end}} # not EXIT_AFTER_EXEC
+
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: gather
+      namespaceIdx: {{$NUM_NAMESPACES}}
+      statefulsetSize: {{$STATEFULSET_SIZE}}

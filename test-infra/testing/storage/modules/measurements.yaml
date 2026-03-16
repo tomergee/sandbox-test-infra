@@ -1,0 +1,18 @@
+## Measurement module defines test scoped measurement.
+
+# TODO(https://github.com/kubernetes/perf-tests/issues/1024): Ideally, this should be 5s
+{{$POD_STARTUP_LATENCY_THRESHOLD := DefaultParam .POD_STARTUP_LATENCY_THRESHOLD "1h"}}
+
+## Input params
+# Valid actions: "start", "gather"
+{{$action := .action}}
+
+steps:
+- name: "{{$action}}ing measurements"
+  measurements:
+  - Identifier: CreatePhasePodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: {{$action}}
+      labelSelector: group = load
+      threshold: {{$POD_STARTUP_LATENCY_THRESHOLD}}

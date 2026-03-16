@@ -1,0 +1,458 @@
+# ==============================================================================
+# ClusterLoader2 Module Configuration
+#
+# This module defines steps for creating and optionally deleting Kubernetes
+# resources (like Jobs or Deployments) based on a template, while measuring
+# various performance metrics.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+# --- Core workload identification and configuration ---
+{{$StepName := .StepName}}                     # Descriptive name for the resource being managed (e.g., "DataLoader Job")
+{{$StepId := .StepId}}                       # Unique identifier for this instance of the step/workload
+{{$Group := .Group}}                         # Label value used to group related resources for measurements
+{{$WorkloadName := .WorkloadName}}           # Basename for the objects created by this module
+{{$WorkloadType := .WorkloadType}}           # Type of the workload (e.g., "job", "deployment") - used in template
+{{$TemplatePath := .TemplatePath}}           # Path to the object manifest template file (e.g., "job.yaml")
+{{$Namespace := .Namespace}}                 # Target namespace for resource creation/deletion
+
+# --- Resource Specification ---
+{{$ApiVersion := DefaultParam .ApiVersion "batch/v1"}} # API version for the primary resource (e.g., "batch/v1", "apps/v1")
+{{$Kind := DefaultParam .Kind "Job"}}         # Kind of the primary resource (e.g., "Job", "Deployment")
+{{$Replicas := .Replicas}}                   # Total number of replicas (pods/jobs) to create/manage
+{{$InObjectReplicas := DefaultParam .InObjectReplicas false}} # If true, replicas are defined *inside* the object template (e.g., Deployment.spec.replicas)
+                                             # If false, CL2 creates $Replicas individual objects per namespace.
+{{$Size := .Size}}                           # A parameter often used for sizing resources within the template (e.g., memory/cpu request size identifier)
+{{$CpuRequest := .CpuRequest}}               # Specific CPU request value to fill into the template
+{{$MemoryRequest := DefaultParam .MemoryRequest ""}}         # Specific Memory request value to fill into the template
+{{$PriorityClass := .PriorityClass}}         # Name of the PriorityClass to assign
+{{$QueueName := .QueueName}}                 # Name of the Kueue queue to assign (if applicable)
+{{$BindPort := DefaultParam .BindPort false}} # Whether to bind a host port (used in template)
+
+{{$PreferredTopology := DefaultParam .PreferredTopology ""}} # Preference for pods in this set to be scheduled within the specified topology domain
+{{$RequiredTopology := DefaultParam .RequiredTopology ""}} # Requirement for pods in this set to be scheduled within the specified topology domain
+{{$RequiredSliceTopology := DefaultParam .RequiredSliceTopology ""}} # Requirement for podset group to be scheduled within the specified topology domain
+{{$PodPayloadSize := DefaultParam .PodPayloadSize "1"}} # Extra payload size in the form of env variable to increase object size
+
+
+# --- Step Control Flow ---
+{{$Phase := .Phase}}                         # Current phase of the overall test (e.g., "Load", "SteadyState")
+{{$Step := .Step}}                           # Sequence number or identifier for this step within the phase
+{{$create := DefaultParam .create true}}      # If true, execute the creation steps
+{{$delete := DefaultParam .delete false}}     # If true, execute the deletion steps
+{{$SleepDuration := DefaultParam .SleepDuration "30s"}} # Duration to pause after creation/deletion steps
+{{$SleepAfterCreateDuration := DefaultParam .SleepAfterCreateDuration ""}} # Duration to pause after creation/deletion steps
+
+# --- Measurement Configuration ---
+{{$Timeout := DefaultParam .Timeout "90m"}}  # Default timeout for waiting operations (e.g., pod running)
+{{$ThroughputThreshold := DefaultParam .ThroughputThreshold 0}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{$PodStartupLatencyThreshold := DefaultParam .PodStartupLatencyThreshold ""}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+
+# --- Pod/Job Lifecycle Waiting ---
+{{$WaitForControlledPodsRunning := DefaultParam .WaitForControlledPodsRunning true}} # If true, wait for pods managed by the primary resource to reach Running state
+{{$DesiredRunningPods := DefaultParam .DesiredRunningPods 0}} # If > 0, wait specifically for this number of pods to be Running (alternative to WaitForControlledPodsRunning)
+{{$WaitForJobToFinish := DefaultParam .WaitForJobToFinish false}} # If true (and Kind is Job), wait for the Job(s) to complete
+{{$JobDurationTimeout := DefaultParam .JobDurationTimeout "30s"}} # Timeout specifically for waiting for Job completion
+
+# --- Diagnostics & Environment ---
+{{$OtherNamespace := DefaultParam .OtherNamespace ""}} # Optional secondary namespace for diagnostics
+{{$DiagnosticsPhase := .DiagnosticsPhase }}       # Subdirectory containing diagnostic scripts for this phase
+{{$LOCAL_RUN := .CL2_LOCAL_RUN}}               # Flag indicating if running locally (adjusts script paths)
+
+{{$ReportWorkloadsSize := DefaultParam .ReportWorkloadsSize false}}
+
+{{$ReportKueueControllerResources := DefaultParam .ReportKueueControllerResources false}}
+{{$ReportPprof := DefaultParam .ReportPprof false}}
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+
+# ------------------------------------------------------------------------------
+# Resource Creation Steps
+# ------------------------------------------------------------------------------
+{{if $create}}
+{{if or $PodStartupLatencyThreshold $WaitForControlledPodsRunning $WaitForJobToFinish}}
+- name: "{{$Phase}}; {{$Step}}; Start measurements for {{$StepName}} ({{$Replicas}} replicas) creation"
+  measurements:
+    # Measures the time from pod creation timestamp to when it becomes 'Running'.
+{{if $PodStartupLatencyThreshold}}
+    - Identifier: PodStartupLatency_{{$StepId}}_Creation
+      Method: PodStartupLatency
+      Params:
+        action: start
+        labelSelector: group={{$Group}}
+        threshold: {{$PodStartupLatencyThreshold}}
+{{end}}
+    # Starts timing the wait for controlled pods (e.g., pods created by a Job or Deployment) to become 'Running'.
+{{if $WaitForControlledPodsRunning}}
+    - Identifier: WaitForRunning_{{$StepId}}
+      Method: WaitForControlledPodsRunning
+      Params:
+        checkIfPodsAreUpdated: false # Set to true if pods might be updated during startup
+        apiVersion: {{$ApiVersion}}
+        kind: {{$Kind}}
+        action: start
+        labelSelector: group={{$Group}}
+        operationTimeout: {{$Timeout}}
+{{end}}
+    # Starts timing the wait for Jobs to reach 'Completed' or 'Failed' state.
+{{if $WaitForJobToFinish}}
+    - Identifier: WaitForFinished_{{$StepId}}
+      Method: WaitForFinishedJobs
+      Params:
+        action: start
+        labelSelector: group={{$Group}}
+    # Measures the time from Job creation to Job completion.
+    - Identifier: JobLifecycleLatency_{{$StepId}}
+      Method: JobLifecycleLatency
+      Params:
+        action: start
+        labelSelector: group={{$Group}}
+{{end}}
+
+{{end}}
+{{if $ThroughputThreshold}}
+# Starts measuring scheduling throughput using a dedicated module.
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: {{$WorkloadName}}
+      action: start
+      threshold: {{$ThroughputThreshold}}
+{{end}}
+{{if $ReportPprof}}
+- module:
+    path: modules/pprof_measurement.yaml
+    params:
+      basename: {{$WorkloadName}}
+      StepId: "{{$StepId}}_During_Creations_Profile"
+      action: start
+{{end}}
+
+{{if $InObjectReplicas}}
+- name: "{{$Phase}}; {{$Step}}; Create 1 {{$StepName}} with {{$Replicas}} in-object replicas (Size: {{$Size}}, CPU: {{$CpuRequest}}), Memory: {{$MemoryRequest}}"
+{{else}}
+- name: "{{$Phase}}; {{$Step}}; Create {{$Replicas}} {{$StepName}} (Size: {{$Size}}, CPU: {{$CpuRequest}}), Memory: {{$MemoryRequest}}"
+{{end}}
+  phases:
+    - namespaceList:
+        - {{$Namespace}}
+      # Determines how replicas are distributed:
+      # - If InObjectReplicas is true, create 1 object (e.g., LWS) per namespace,
+      #   and the object itself manages the $Replicas count internally.
+      # - If InObjectReplicas is false, create $Replicas individual objects (e.g., Jobs)
+      #   per namespace.
+      replicasPerNamespace: {{if $InObjectReplicas}}1{{else}}{{$Replicas}}{{end}}
+      tuningSet: default # Or specify a relevant tuning set
+      objectBundle:
+        - basename: {{$WorkloadName}}
+          objectTemplatePath: {{$TemplatePath}}
+          templateFillMap:
+            # --- Pass parameters to the object template ---
+            Size: {{$Size}}
+            CpuRequest: {{$CpuRequest}}
+            MemoryRequest: {{$MemoryRequest}}
+            PriorityClass: {{$PriorityClass}}
+            Group: {{$Group}} # Essential for labeling and measurements
+            QueueName: {{$QueueName}}
+            WorkloadType: {{$WorkloadType}}
+            BindPort: {{$BindPort}}
+            RequiredTopology: {{$RequiredTopology}}
+            PreferredTopology: {{$PreferredTopology}}
+            RequiredSliceTopology: {{$RequiredSliceTopology}}
+            PodPayloadSize: {{$PodPayloadSize}}
+            # Conditionally pass Replicas if it's handled within the template
+            {{if $InObjectReplicas}}
+            Replicas: {{$Replicas}}
+            {{end}}
+
+{{if $SleepAfterCreateDuration}}
+- name: "{{$Phase}}; {{$Step}}; Sleep for {{$SleepAfterCreateDuration}} right after creation"
+  measurements:
+    # Pauses execution for the specified duration.
+    - Identifier: Sleep_RightAfterCreate_{{$StepId}}
+      Method: Sleep
+      Params:
+        duration: {{$SleepAfterCreateDuration}}
+{{end}}
+{{if $ReportKueueControllerResources}}
+- name: "{{$Phase}}; {{$Step}}; Run diagnostics during creation of {{$StepName}}"
+  measurements:
+    # Executes a diagnostic script.
+    - Identifier: ReportKueueResources_DuringCreate_{{$StepId}}
+      Method: Exec
+      Params:
+        timeout: 10m
+        command:
+        {{if $LOCAL_RUN}}
+        - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/common/get_kueue_metrics.sh"
+        {{else}}
+        - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/common/get_kueue_metrics.sh"
+        {{end}}
+{{end}}
+{{if $WaitForControlledPodsRunning}}
+# --- Wait for Creation Completion ---
+- name: "{{$Phase}}; {{$Step}}; Wait for {{$StepName}} pods to be Running"
+  measurements:
+    # Gathers the result of the WaitForControlledPodsRunning measurement started earlier.
+    - Method: WaitForControlledPodsRunning
+      Identifier: WaitForRunning_{{$StepId}}
+      Params:
+        action: gather
+        operationTimeout: {{$Timeout}}
+        labelSelector: group={{$Group}}
+{{else}}
+# --- Alternatively, wait for a specific number of pods ---
+- name: "{{$Phase}}; {{$Step}}; Wait for {{$DesiredRunningPods}} {{$StepName}} pods to be Running"
+  measurements:
+    # Waits until the desired number of pods matching the label selector are Running.
+    - Identifier: WaitForDesiredCountRunning_{{$StepId}}
+      Method: WaitForRunningPods
+      Params:
+        action: gather # This method typically only needs 'gather'
+        timeout: {{$Timeout}}
+        desiredPodCount: {{$DesiredRunningPods}}
+        labelSelector: group={{$Group}}
+{{end}}
+
+{{if $PodStartupLatencyThreshold}}
+# --- Gather Creation Measurements ---
+- name: "{{$Phase}}; {{$Step}}; Gather {{$StepName}} pod startup latency"
+  measurements:
+    # Gathers the result of the PodStartupLatency measurement.
+    - Identifier: PodStartupLatency_{{$StepId}}_Creation
+      Method: PodStartupLatency
+      Params:
+        action: gather
+{{end}}
+
+{{if $ThroughputThreshold}}
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: {{$WorkloadName}}
+      action: gather
+{{end}}
+{{if $ReportPprof}}
+- module:
+    path: modules/pprof_measurement.yaml
+    params:
+      basename: {{$WorkloadName}}
+      StepId: "{{$StepId}}_During_Creations_Profile"
+      action: gather
+{{end}}
+# --- Post-Creation Diagnostics ---
+- name: "{{$Phase}}; {{$Step}}; Run diagnostics after creating {{$StepName}}"
+  measurements:
+    # Executes a diagnostic script.
+    - Identifier: RunDiagnostics_AfterCreate_{{$StepId}}
+      Method: Exec
+      Params:
+        timeout: 30m
+        command:
+          - "bash"
+          # Adjust script path based on execution environment (local vs. CI/CD)
+          {{if $LOCAL_RUN}}
+          - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/{{$DiagnosticsPhase}}/check_count.sh"
+          {{else}}
+          - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/{{$DiagnosticsPhase}}/check_count.sh"
+          {{end}}
+          # Pass necessary arguments to the script
+          - "{{$Namespace}}"
+          {{if $OtherNamespace}}
+          - "{{$OtherNamespace}}"
+          {{end}}
+          - "{{$Phase}}; {{$Step}} (Create)" # Context for the script
+    {{if $ReportWorkloadsSize}}
+    - Identifier: RunWorkloadsSize_AfterCreate_{{$StepId}}
+      Method: Exec
+      Params:
+        timeout: 30m
+        command:
+          - "bash"
+          # Adjust script path based on execution environment (local vs. CI/CD)
+          {{if $LOCAL_RUN}}
+          - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/common/get_workload_size.sh"
+          {{else}}
+          - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/common/get_workload_size.sh"
+          {{end}}
+          # Pass necessary arguments to the script
+          - "{{$Namespace}}"
+    {{end}}
+# --- Post-Creation Sleep ---
+- name: "{{$Phase}}; {{$Step}}; Sleep for {{$SleepDuration}} after creation"
+  measurements:
+    # Pauses execution for the specified duration.
+    - Identifier: Sleep_AfterCreate_{{$StepId}}
+      Method: Sleep
+      Params:
+        duration: {{$SleepDuration}}
+
+{{if $ReportKueueControllerResources}}
+- name: "{{$Phase}}; {{$Step}}; Run diagnostics after creation of {{$StepName}}"
+  measurements:
+    # Executes a diagnostic script.
+    - Identifier: ReportKueueResources_AfterCreate_{{$StepId}}
+      Method: Exec
+      Params:
+        timeout: 10m
+        command:
+        {{if $LOCAL_RUN}}
+        - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/common/get_kueue_metrics.sh"
+        {{else}}
+        - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/common/get_kueue_metrics.sh"
+        {{end}}
+{{end}}
+
+{{if $ReportPprof}}
+- module:
+    path: modules/pprof_measurement.yaml
+    params:
+      basename: {{$WorkloadName}}
+      StepId: "{{$StepId}}_After_Creations_Profile"
+      action: start
+
+- module:
+    path: modules/pprof_measurement.yaml
+    params:
+      basename: {{$WorkloadName}}
+      StepId: "{{$StepId}}_After_Creations_Profile"
+      action: gather
+{{end}}
+# --- Wait for Job Completion (if applicable) ---
+{{if $WaitForJobToFinish}}
+- name: "{{$Phase}}; {{$Step}}; Wait for {{$StepName}} Jobs to finish"
+  measurements:
+    # Gathers the result of the WaitForFinishedJobs measurement.
+    - Identifier: WaitForFinished_{{$StepId}}
+      Method: WaitForFinishedJobs
+      Params:
+        action: gather
+        timeout: {{$JobDurationTimeout}}
+        labelSelector: group={{$Group}} # Ensure selector matches if not using default
+
+- name: "{{$Phase}}; {{$Step}}; Gather {{$StepName}} Job lifecycle latency"
+  measurements:
+    # Gathers the result of the JobLifecycleLatency measurement.
+    - Identifier: JobLifecycleLatency_{{$StepId}}
+      Method: JobLifecycleLatency
+      Params:
+        action: gather
+        timeout: {{$JobDurationTimeout}} # Should be less than or equal to the wait timeout
+        labelSelector: group={{$Group}} # Ensure selector matches
+{{end}}
+
+{{end}} # End of 'if $create' block
+
+# ------------------------------------------------------------------------------
+# Resource Deletion Steps
+# ------------------------------------------------------------------------------
+{{if $delete}}
+
+# --- Start Deletion Measurements ---
+{{if $WaitForControlledPodsRunning}} # Reuse this method to wait for pods to terminate
+- name: "{{$Phase}}; {{$Step}}; Start measurements for {{$StepName}} deletion"
+  measurements:
+    # Starts timing the wait for controlled pods to terminate (reach 0 running).
+    - Identifier: WaitForDeleting_{{$StepId}}
+      Method: WaitForControlledPodsRunning # Waits for the count to reach 0
+      Params:
+        checkIfPodsAreUpdated: false # Not relevant for deletion
+        apiVersion: {{$ApiVersion}}
+        kind: {{$Kind}}
+        action: start
+        labelSelector: group={{$Group}}
+        operationTimeout: {{$Timeout}}
+{{end}}
+
+# --- Execute Deletion ---
+- name: "{{$Phase}}; {{$Step}}; Delete {{$Replicas}} {{$StepName}} (Size: {{$Size}})"
+  phases:
+    - namespaceList:
+        - {{$Namespace}}
+      # Setting replicasPerNamespace to 0 triggers deletion of objects matching the basename.
+      replicasPerNamespace: 0
+      tuningSet: default
+      objectBundle:
+        - basename: {{$WorkloadName}}
+          # Provide template details again so CL2 knows *what* to delete.
+          objectTemplatePath: {{$TemplatePath}}
+          templateFillMap:
+            # Include identifying parameters, especially Group.
+            Size: {{$Size}}
+            CpuRequest: {{$CpuRequest}}
+            MemoryRequest: {{$MemoryRequest}}
+            PriorityClass: {{$PriorityClass}}
+            Group: {{$Group}}
+            QueueName: {{$QueueName}}
+            WorkloadType: {{$WorkloadType}}
+            BindPort: {{$BindPort}}
+            RequiredTopology: {{$RequiredTopology}}
+            PreferredTopology: {{$PreferredTopology}}
+            RequiredSliceTopology: {{$RequiredSliceTopology}}
+            PodPayloadSize: {{$PodPayloadSize}}
+            {{if $InObjectReplicas}}
+            Replicas: {{$Replicas}}
+            {{end}}
+
+# --- Wait for Deletion Completion ---
+{{if $WaitForControlledPodsRunning}}
+- name: "{{$Phase}}; {{$Step}}; Wait for {{$StepName}} pods to be deleted"
+  measurements:
+    # Gathers the result of the WaitForControlledPodsRunning measurement (waiting for 0 pods).
+    - Method: WaitForControlledPodsRunning
+      Identifier: WaitForDeleting_{{$StepId}}
+      Params:
+        action: gather
+        operationTimeout: {{$Timeout}}
+        labelSelector: group={{$Group}}
+{{else}}
+# Alternative wait if not using WaitForControlledPodsRunning for deletion
+- name: "{{$Phase}}; {{$Step}}; Wait for {{$StepName}} pods deletion (target 0)"
+  measurements:
+    # Waits until 0 pods matching the label selector are Running.
+    - Identifier: WaitForDeletion_{{$StepId}}
+      Method: WaitForRunningPods
+      Params:
+        action: gather
+        timeout: {{$Timeout}}
+        desiredPodCount: 0 # Target zero pods
+        labelSelector: group={{$Group}}
+{{end}}
+
+# --- Post-Deletion Diagnostics ---
+- name: "{{$Phase}}; {{$Step}}; Run diagnostics after deleting {{$StepName}}"
+  measurements:
+    # Executes a diagnostic script.
+    - Identifier: RunDiagnostics_AfterDelete_{{$StepId}}
+      Method: Exec
+      Params:
+        timeout: 30m
+        command:
+          - "bash"
+          # Adjust script path based on execution environment
+          {{if $LOCAL_RUN}}
+          - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/{{$DiagnosticsPhase}}/check_count.sh"
+          {{else}}
+          - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/{{$DiagnosticsPhase}}/check_count.sh"
+          {{end}}
+          # Pass necessary arguments to the script
+          - "{{$Namespace}}"
+          {{if $OtherNamespace}}
+          - "{{$OtherNamespace}}"
+          {{end}}
+          - "{{$Phase}}; {{$Step}} (Delete)" # Context for the script
+
+# --- Post-Deletion Sleep ---
+- name: "{{$Phase}}; {{$Step}}; Sleep for {{$SleepDuration}} after deletion"
+  measurements:
+    # Pauses execution.
+    - Identifier: Sleep_AfterDelete_{{$StepId}}
+      Method: Sleep
+      Params:
+        duration: {{$SleepDuration}}
+
+{{end}} # End of 'if $delete' block

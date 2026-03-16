@@ -1,0 +1,77 @@
+{{$namespaces := 2000}}
+{{$defaultQps := 100}}
+{{$deployments := 10}}
+{{$deploymentSize := 50}}
+
+{{$project := DefaultParam .CL2_PROJECT "<empty project>"}}
+
+# TODO: those values should be parameterized. For now, cluster name and location are hard-coded in Terraform config as well.
+{{$clusterName := "test-cluster"}}
+{{$location := "us-central1"}}
+{{$npName := "np-small-02"}}
+{{$channel := "rapid"}}
+
+# Overridable throughput thresholds
+{{$DEPLOYMENTS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_DEPLOYMENTS_THROUGHPUT_THRESHOLD 0}}
+
+
+name: load
+namespace:
+  number: {{$namespaces}}
+  deleteStaleNamespaces: true # for experiments
+tuningSets:
+- name: default
+  globalQPSLoad:
+    qps: {{$defaultQps}}
+    burst: 1
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+
+steps:
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: start
+
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: deployment-500
+      create: true
+      minNamespace: 1
+      maxNamespace: {{$deployments}}
+      size: {{$deploymentSize}}
+      throughputThreshold: {{$DEPLOYMENTS_THROUGHPUT_THRESHOLD}}
+
+- module:
+    path: modules/channel.yaml
+    params:
+      channel: {{$channel}}
+      clusterName: {{$clusterName}}
+      project: {{$project}}
+      location: {{$location}}
+
+- module:
+    path: modules/taints.yaml
+    params:
+      nodePool: {{$npName}}
+      clusterName: {{$clusterName}}
+      project: {{$project}}
+      location: {{$location}}
+
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: deployment-500
+      minNamespace: 1
+      maxNamespace: {{$deployments}}
+      update: true
+      delete: true
+      size: {{$deploymentSize}}
+      throughputThreshold: {{$DEPLOYMENTS_THROUGHPUT_THRESHOLD}}
+
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: gather

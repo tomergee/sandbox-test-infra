@@ -1,0 +1,83 @@
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}}
+{{$MemoryRequest := DefaultParam .MemoryRequest "20M"}}
+{{$podPayloadSize := DefaultParam .CL2_STATEFULSET_POD_PAYLOAD_SIZE "1024"}}
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Name}}
+  labels:
+    group: load
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        name: {{.Name}}
+        group: load
+{{if .SvcName}}
+        svc: {{.SvcName}}-{{.Index}}
+{{end}}
+    spec:
+      schedulerName: {{$SchedulerName}}
+      containers:
+      - env:
+        - name: ENV_VAR
+          value: {{RandData $podPayloadSize}}
+        image: k8s.gcr.io/pause:3.1
+        imagePullPolicy: IfNotPresent
+        name: {{.Name}}
+        ports:
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            memory: {{$MemoryRequest}}
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /pod-info
+          name: downward-api
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      volumes:
+      - emptyDir:
+          medium: Memory
+        name: dshm
+      - downwardAPI:
+          defaultMode: 420
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+            path: name
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.uid
+            path: uid
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels
+            path: labels
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.annotations
+            path: annotations
+        name: downward-api

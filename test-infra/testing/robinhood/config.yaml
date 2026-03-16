@@ -1,0 +1,123 @@
+# Test parameters.
+{{$namespaces := DefaultParam .CL2_NAMESPACES 1}}
+{{$SLEEP_FOR_MANUAL_CONFIG := DefaultParam .CL2_SLEEP_FOR_MANUAL_CONFIG "0m"}}
+
+# Timeout values for every scaleup of test's deployment.
+# Initial scaleup might take longer time due to multiple resizes
+# of the cluster's control plane machines, hence we set its timeout
+# to a larger value.
+{{$SCALEUP_TIMEOUT := DefaultParam .CL2_SCALEUP_TIMEOUT "60m"}}
+{{$INIT_SCALEUP_TIMEOUT := DefaultParam .CL2_INIT_SCALEUP_TIMEOUT "150m"}}
+{{$VERIFICATION_TIMEOUT := DefaultParam .CL2_VERIFICATION_TIMEOUT "120m"}}
+
+# Number of new pods added to the test deployment on each scaleup.
+{{$PODS_BATCH_SIZE := DefaultParam .CL2_PODS_BATCH_SIZE 12500}}
+# Total number of test deployment's scaleups.
+{{$TOTAL_BATCHES_NUMBER := DefaultParam .CL2_TOTAL_BATCHES_NUMBER 2}}
+# Number of nodes to verify
+{{$VERIFY_NODE_COUNT := DefaultParam .CL2_VERIFY_NODE_COUNT false}}
+{{$MAX_NODE_COUNT_PER_BATCH := DefaultParam .CL2_MAX_NODE_COUNT_PER_BATCH 1300}}
+{{$MIN_NODE_COUNT := DefaultParam .CL2_MIN_NODE_COUNT 1}}
+
+name: robinhood
+namespace:
+  number: {{$namespaces}}
+tuningSets:
+# default is a tuningset that is meant to be used when we don't have any specific requirements on rate of operations.
+- name: default
+  globalQPSLoad:
+    qps: 100
+    burst: 1
+
+steps:
+- name: Waiting for {{$SLEEP_FOR_MANUAL_CONFIG}} before starting the test to allow manual configuration if needed
+  measurements:
+  - Identifier: WaitForManualConfig
+    Method: Sleep
+    Params:
+      duration: {{$SLEEP_FOR_MANUAL_CONFIG}}
+
+- name: Starting pod startup latency measurement
+  measurements:
+  - Identifier: PodStartupLatencyMeasurement
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = robinhood
+      threshold: 2h # Setting threshold to large value in order not to fail the measurement.
+
+{{range $batch := Loop $TOTAL_BATCHES_NUMBER}}
+- name: Starting measurement for waiting for pods no. {{AddInt 1 $batch}}
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = robinhood
+      operationTimeout: {{IfThenElse (eq $batch 0) $INIT_SCALEUP_TIMEOUT $SCALEUP_TIMEOUT}}
+      # TODO: Revisit this after https://github.com/kubernetes/perf-tests/issues/1547 is fixed.
+      checkIfPodsAreUpdated: false
+
+- name: Scaling up deployment to {{MultiplyInt $PODS_BATCH_SIZE (AddInt 1 $batch)}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{MultiplyInt $PODS_BATCH_SIZE (AddInt 1 $batch)}}
+
+- name: Waiting for the creation of pods no. {{AddInt 1 $batch}}
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+    Params:
+      action: gather
+
+{{if $VERIFY_NODE_COUNT}}
+- name: Verifing node count of pods no. {{AddInt 1 $batch}}
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{$MIN_NODE_COUNT}}
+      maxDesiredNodeCount: {{MultiplyInt $MAX_NODE_COUNT_PER_BATCH (AddInt 1 $batch)}}
+      timeout: {{$VERIFICATION_TIMEOUT}}
+{{end}}
+
+{{end}}
+
+- name: Gathering pod startup latency
+  measurements:
+  - Identifier: PodStartupLatencyMeasurement
+    Method: PodStartupLatency
+    Params:
+      action: gather
+
+- name: Deleting pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: 0
+
+- name: Waiting for the deletion pods
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+    Params:
+      action: gather

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: bayer
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: bayer
+        name: {{.Name}}
+    spec:
+      containers:
+      - image: k8s.gcr.io/pause:3.1
+        name: {{.Name}}
+        # Make sure there is only one pod on a heapster node
+        ports:
+          - name: http
+            containerPort: 80
+            hostPort: 80
+        resources:
+          requests:
+            # What we want to achieve is to have 1 pod per node.
+            cpu: {{.CpuRequest}}
+            memory: {{.MemoryRequest}}
+          limits:
+            cpu: {{.CpuRequest}}
+            memory: {{.MemoryRequest}}
+        volumeMounts:
+          - name: configmap
+            mountPath: /var/configmap
+      dnsPolicy: Default
+      terminationGracePeriodSeconds: 1
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      volumes:
+        - name: configmap
+          configMap:
+            name: configmap-{{.Index}}

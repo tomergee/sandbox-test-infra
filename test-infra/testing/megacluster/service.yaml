@@ -1,0 +1,16 @@
+{{$MultipleSvcs := DefaultParam .MultipleSvcs false}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{.Name}}
+spec:
+  selector:
+{{if $MultipleSvcs}}
+    svc: "{{.SvcName}}-{{.Index}}"
+{{else}}
+    svc: {{.SvcName}}
+{{end}}
+  ports:
+  - protocol: TCP
+    port: 1327
+    targetPort: 1327

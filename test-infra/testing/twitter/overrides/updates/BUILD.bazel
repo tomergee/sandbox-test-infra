@@ -1,0 +1,23 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["updates.go"],
+    importpath = "gke-internal.googlesource.com/test-infra/perf-tests/testing/twitter/overrides/updates",
+    visibility = ["//visibility:public"],
+    deps = ["//perf-tests/testing/twitter/overrides/microservices:go_default_library"],
+)
+
+filegroup(
+    name = "package-srcs",
+    srcs = glob(["**"]),
+    tags = ["automanaged"],
+    visibility = ["//visibility:private"],
+)
+
+filegroup(
+    name = "all-srcs",
+    srcs = [":package-srcs"],
+    tags = ["automanaged"],
+    visibility = ["//visibility:public"],
+)

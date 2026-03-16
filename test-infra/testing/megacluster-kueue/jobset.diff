@@ -1,0 +1,36 @@
+diff --git a/jobset.yaml b/jobset.yaml
+index e9612ee..1bc33fb 100644
+--- a/jobset.yaml
++++ b/jobset.yaml
+@@ -8910,8 +8910,8 @@ spec:
+           httpGet:
+             path: /healthz
+             port: 8081
+-          initialDelaySeconds: 15
+-          periodSeconds: 20
++          initialDelaySeconds: 30
++          periodSeconds: 120
+         name: manager
+         ports:
+         - containerPort: 8443
+@@ -8924,14 +8924,15 @@ spec:
+           httpGet:
+             path: /readyz
+             port: 8081
+-          initialDelaySeconds: 5
+-          periodSeconds: 10
++          initialDelaySeconds: 30
++          periodSeconds: 120
+         resources:
+           limits:
+-            memory: 4Gi
++            cpu: 5
++            memory: 40Gi
+           requests:
+-            cpu: 500m
+-            memory: 128Mi
++            cpu: 5
++            memory: 40Gi
+         securityContext:
+           allowPrivilegeEscalation: false
+           capabilities:

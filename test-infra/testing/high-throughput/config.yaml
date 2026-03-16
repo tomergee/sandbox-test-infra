@@ -1,0 +1,139 @@
+{{$namespaces := 2000}}
+{{$defaultQps := 100}}
+{{$numDaemonsets := DefaultParam .CL2_NUM_DAEMONSETS 15}}
+
+# Overridable throughput thresholds
+{{$DAEMONSETS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_DAEMONSETS_THROUGHPUT_THRESHOLD 0}}
+{{$DEPLOYMENTS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_DEPLOYMENTS_THROUGHPUT_THRESHOLD 0}}
+{{$JOBS_THROUGHPUT_THRESHOLD := DefaultParam .CL2_JOBS_THROUGHPUT_THRESHOLD 0}}
+
+name: load
+namespace:
+  number: {{$namespaces}}
+  deleteStaleNamespaces: true # for experiments
+tuningSets:
+- name: default
+  globalQPSLoad:
+    qps: {{$defaultQps}}
+    burst: 1
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+
+steps:
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: start
+
+- name: Creating PriorityClass for DaemonSets
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: daemonset-priorityclass
+        objectTemplatePath: priorityclass.yaml
+        templateFillMap:
+          Value: 1000000
+
+# Prepare some base state.
+# According to mrz@ clusters have ~15 daemonsets on average and we need to support it.
+# Let's try to keep this baseline (quite ambitious in 15k TBH).
+- module:
+    path: modules/daemonsets.yaml
+    params:
+      create: true
+      minNamespace: {{SubtractInt $namespaces (SubtractInt $numDaemonsets 1)}}
+      maxNamespace: {{$namespaces}}
+      throughputThreshold: {{$DAEMONSETS_THROUGHPUT_THRESHOLD}}
+
+# Ten 5k StatefulSets without updating as it takes ages for StatefulSets.
+- module:
+    path: modules/statefulsets.yaml
+    params:
+      basename: statefulset-5000
+      create: true
+      update: false
+      delete: true
+      minNamespace: 1
+      maxNamespace: 10
+      size: 5000
+
+# One thousand 50-pod StatefulSet without updating.
+# TODO(b/295347516): debug deadlock in StatefulSet controller.
+# - module:
+#     path: modules/statefulsets.yaml
+#     params:
+#       basename: statefulset-50
+#       create: true
+#       update: false
+#       delete: true
+#       minNamespace: 1
+#       maxNamespace: 1000
+#       size: 50
+
+# Then mixed size deployments (with services) to understand their performance.
+# The size of the deployment is a factor because replicaset controller has fixed number of
+# replicasets handled at the same time (worker count).
+# We expect that smaller deployments will be slower to create.
+
+# Let's start with 10 5k deployments.
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: deployment-5000
+      create: true
+      update: true
+      delete: true
+      minNamespace: 1
+      maxNamespace: 10
+      size: 5000
+      throughputThreshold: {{$DEPLOYMENTS_THROUGHPUT_THRESHOLD}}
+
+# Then 100 500-pod deployments.
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: deployment-500
+      create: true
+      update: true
+      delete: true
+      minNamespace: 1
+      maxNamespace: 100
+      size: 500
+      throughputThreshold: {{$DEPLOYMENTS_THROUGHPUT_THRESHOLD}}
+
+# Then 1000 50-pod deployments.
+- module:
+    path: modules/deployments.yaml
+    params:
+      basename: deployment-50
+      create: true
+      update: true
+      delete: true
+      minNamespace: 1
+      maxNamespace: 1000
+      size: 50
+      throughputThreshold: {{$DEPLOYMENTS_THROUGHPUT_THRESHOLD}}
+
+- module:
+    path: modules/preemption.yaml
+
+- module:
+    path: modules/test-jobs.yaml
+    params:
+      throughputThreshold: {{$JOBS_THROUGHPUT_THRESHOLD}}
+
+- module:
+    path: modules/daemonsets.yaml
+    params:
+      delete: true
+      minNamespace: {{SubtractInt $namespaces (SubtractInt $numDaemonsets 1)}}
+      maxNamespace: {{$namespaces}}
+
+# We leak priorityclass objects. CL2 will remove them as part of test teardown.
+
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: gather

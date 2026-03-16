@@ -1,0 +1,10 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-lustre
+provisioner: lustre.csi.storage.gke.io
+volumeBindingMode: Immediate
+reclaimPolicy: Delete
+parameters:
+  network: perf-lustre-rapid-20k
+  perUnitStorageThroughput: "1000"

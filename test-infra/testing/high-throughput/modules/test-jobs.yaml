@@ -1,0 +1,96 @@
+# To simulate what Renault does in their workload, we create ~2 pods per node
+# and create some backlog of pods to be scheduled. To attain this, we're setting
+# the CpuRequest to 225m in the first two submodules.
+#
+# Rationale: we can mimic the maths conducted in modules/preemption.yaml:
+# taking into account relevant CPU consumption values:
+#
+#   * 940 mCPU allocatable in e2-medium,
+#   * 240-500 mCPU already allocated by the system pods on nodes,
+#   * 75 mCPU allocated by the test daemonsets,
+#
+# leaves us with 365-625 mCPU. Preferably, we'd like to pick X for the CpuRequest
+# which satisfies the following conditions:
+#
+#   (1) 2 * X < 365,
+#   (2) 3 * X > 625,
+#
+# but no such X exists. On the other hand, the lack of uniformity of
+# memory consumption is due to deployment-based components like konnectivity,
+# kube-dns, metrics-server, etc. that have a low number of replicas, however.
+# Because of that, the vast majority of the nodes would have around 625
+# spare mCPUs rather than 365, hence making the inequality (2) more relevant
+# to satisfy (2 pods/node in general, 1 pod/node occasionally vs. 3 pods/node
+# in general, 2 pods/node occasionally). 225 is a value which is just high enough
+# above 625/3 to be sure that no more than 2 pods are scheduled on a node.
+
+steps:
+# Single 50k-pod job with "Indexed" completion mode.
+- module:
+    path: modules/jobs.yaml
+    params:
+      basename: job-indexed
+      create: true
+      delete: true
+      mode: Indexed
+      minNamespace: 1
+      maxNamespace: 1
+      cpuRequest: 225m
+      jobRunningTime: 5s
+      size: 50000
+      backoffLimit: 50
+
+# Single 50k-pod job with "NonIndexed" completion mode.
+- module:
+    path: modules/jobs.yaml
+    params:
+      basename: job-nonindexed
+      create: true
+      delete: true
+      mode: NonIndexed
+      minNamespace: 1
+      maxNamespace: 1
+      cpuRequest: 225m
+      jobRunningTime: 5s
+      size: 50000
+      backoffLimit: 50
+
+# We would also like to see how scheduler performs when there's enough space
+# for all of them in a cluster (hence no backlog of pods to be scheduled).
+# Applying similar thinking that was conducted at the beginning of this module
+# we can conclude that 40 mCPU should be small enough to accommodate all pods
+# in a 5k e2-medium nodes cluster, both on DPv1 as well as DPv2 clusters.
+
+# Single 50k-pod job with "Indexed" completion mode.
+- module:
+    path: modules/jobs.yaml
+    params:
+      basename: job-small-pods
+      create: true
+      delete: true
+      mode: Indexed
+      minNamespace: 1
+      maxNamespace: 1
+      cpuRequest: 40m
+      jobRunningTime: 3m
+      jobDurationTimeout: 15m
+      size: 50000
+      backoffLimit: 50
+      throughputThreshold: {{.throughputThreshold}}
+
+# Create 250 Indexed Jobs with 15 pods each, configured with
+# pod affinities/anti-affinites for 1:1 job to topology domain assignment.
+- module:
+    path: modules/jobs.yaml
+    params:
+      basename: exclusive-job-per-topology
+      objectTemplatePath: exclusive-job-per-topology.yaml
+      replicasPerNamespace: 250
+      create: true
+      delete: true
+      mode: Indexed
+      minNamespace: 1
+      maxNamespace: 1
+      cpuRequest: 3m
+      jobRunningTime: 5m
+      size: 15

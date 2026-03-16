@@ -1,0 +1,327 @@
+# ASSUMPTIONS:
+# - Underlying cluster should have 100+ nodes.
+# - Number of HPAs must by divisible by number og HPAs per namespace.
+
+#Constants
+{{$DENSITY_RESOURCE_CONSTRAINTS_FILE := DefaultParam .DENSITY_RESOURCE_CONSTRAINTS_FILE ""}}
+{{$NODE_MODE := DefaultParam .NODE_MODE "allnodes"}}
+{{$PODS_PER_NODE := DefaultParam .PODS_PER_NODE 30}}
+{{$LOAD_TEST_THROUGHPUT := DefaultParam .LOAD_TEST_THROUGHPUT 20}}
+{{$DELETE_TEST_THROUGHPUT := DefaultParam .CL2_DELETE_TEST_THROUGHPUT $LOAD_TEST_THROUGHPUT}}
+{{$SCHEDULER_THROUGHPUT_THRESHOLD := DefaultParam .CL2_SCHEDULER_THROUGHPUT_THRESHOLD 0}}
+{{$MIN_SATURATION_PODS_TIMEOUT := 180}}
+{{$ENABLE_CHAOSMONKEY := DefaultParam .ENABLE_CHAOSMONKEY false}}
+{{$ENABLE_PROMETHEUS_API_RESPONSIVENESS := DefaultParam .ENABLE_PROMETHEUS_API_RESPONSIVENESS false}}
+{{$ENABLE_SYSTEM_POD_METRICS:= DefaultParam .ENABLE_SYSTEM_POD_METRICS true}}
+{{$USE_SIMPLE_LATENCY_QUERY := DefaultParam .USE_SIMPLE_LATENCY_QUERY false}}
+{{$ENABLE_RESTART_COUNT_CHECK := DefaultParam .ENABLE_RESTART_COUNT_CHECK false}}
+{{$RESTART_COUNT_THRESHOLD_OVERRIDES:= DefaultParam .RESTART_COUNT_THRESHOLD_OVERRIDES ""}}
+{{$ENABLE_CONTAINER_RESTARTS_MEASUREMENT := DefaultParam .CL2_ENABLE_CONTAINER_RESTARTS_MEASUREMENT false}}
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}}
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}}
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER false}}
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}}
+{{$MIN_SATURATION_TIME := 300}}
+{{$HPA_AGE_SLO := DefaultParam .CL2_HPA_AGE_SLO 180}}
+{{$HPA_LATENCY_SLO := DefaultParam .CL2_HPA_LATENCY_SLO 60}}
+{{$HPA_RESYNC_LATENCY_SLO := DefaultParam .CL2_HPA_RESYNC_LATENCY_SLO 20}}
+{{$HPA_RECOMMENDATION_SOURCE := DefaultParam .CL2_HPA_RECOMMENDATION_SOURCE "NonAtomic"}}
+{{$HPA_METRIC_SOURCE := DefaultParam .CL2_HPA_METRIC_SOURCE "NonAtomic"}}
+{{$IS_LOAD_BALANCER_AUTOSCALING_TEST := DefaultParam .CL2_IS_LOAD_BALANCER_AUTOSCALING_TEST false}}
+
+# Variables for non load-balancer based autoscaling
+{{$bigHPAs := DefaultParam .BIG_HPAS 5}}
+{{$bigHPAsPerNamespace := DefaultParam .CL2_BIG_HPAS_PER_NAMESPACE 1}}
+{{$bigHPAsNamespaces := DivideInt $bigHPAs $bigHPAsPerNamespace }}
+{{$smallHPAs := DefaultParam .CL2_SMALL_HPAS 1000}}
+{{$smallHPAsPerNamespace := DefaultParam .CL2_SMALL_HPAS_PER_NAMESPACE 1}}
+{{$smallHPAsNamespaces := DivideInt $smallHPAs $smallHPAsPerNamespace }}
+
+# Variables for load-balancer based autoscaling
+{{$lbHpas := DefaultParam .CL2_LB_HPAS 2}}
+{{$lbHpasPerNamespace := DefaultParam .CL2_LB_HPAS_PER_NAMESPACE 1}}
+{{$lbHttpRoutesPerGateway := DefaultParam .CL2_LB_HTTP_ROUTES_PER_GATEWAY 1}}
+
+# Other variables
+{{$namespaces := AddInt $bigHPAsNamespaces $smallHPAsNamespaces}}
+{{if $IS_LOAD_BALANCER_AUTOSCALING_TEST}}
+  {{$namespaces = DivideInt $lbHpas $lbHpasPerNamespace}}
+{{end}}
+{{$totalPods := MultiplyInt .Nodes $PODS_PER_NODE}}
+{{$saturationTime := MaxInt (DivideInt $totalPods $LOAD_TEST_THROUGHPUT) $MIN_SATURATION_TIME}}
+{{$deletionTime := DivideInt $totalPods $DELETE_TEST_THROUGHPUT}}
+{{$saturationDeploymentTimeout := DivideFloat $totalPods $LOAD_TEST_THROUGHPUT | AddInt $MIN_SATURATION_PODS_TIMEOUT}}
+# saturationDeploymentHardTimeout must be at least 20m to make sure that ~10m node
+# failure won't fail the test. See https://github.com/kubernetes/kubernetes/issues/73461#issuecomment-467338711
+{{$saturationDeploymentHardTimeout := MaxInt $saturationDeploymentTimeout 1200}}
+
+name: density
+automanagedNamespaces: {{$namespaces}}
+tuningSets:
+- name: RandomizedSaturationTimeLimited
+  RandomizedTimeLimitedLoad:
+    timeLimit: {{$saturationTime}}s
+- name: RandomizedDeletionTimeLimited
+  RandomizedTimeLimitedLoad:
+    timeLimit: {{$saturationTime}}s
+{{if $ENABLE_CHAOSMONKEY}}
+chaosMonkey:
+  nodeFailure:
+    failureRate: 0.01
+    interval: 1m
+    jitterFactor: 10.0
+    simulatedDowntime: 10m
+{{end}}
+steps:
+- name: Starting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheus
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: start
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: start
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt .Nodes 100)}}
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt .Nodes 100)}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      nodeMode: {{$NODE_MODE}}
+      resourceConstraints: {{$DENSITY_RESOURCE_CONSTRAINTS_FILE}}
+      systemPodMetricsEnabled: {{$ENABLE_SYSTEM_POD_METRICS}}
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{YamlQuote $CLUSTER_OOMS_IGNORED_PROCESSES 4}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: {{$ENABLE_RESTART_COUNT_CHECK}}
+  - Identifier: HPARecommendationAgeSLO
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: HPA Recommendation Age
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: RecommendationAge
+          query: histogram_quantile(0.99, sum(rate(vpa_recommender_uas_hpa_end_to_end_recommendation_age_seconds_bucket{recommendation_source="{{$HPA_RECOMMENDATION_SOURCE}}",metric_source="{{$HPA_METRIC_SOURCE}}"}[%v])) by (le))
+          threshold: {{$HPA_AGE_SLO}}
+          requireSamples: true
+  - Identifier: HPARecommendationLatencySLO
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: HPA Recommendation Latency
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: RecommendationLatency
+          query: histogram_quantile(0.99, sum(rate(vpa_recommender_uas_hpa_end_to_end_recommendation_latency_seconds_bucket{recommendation_source="{{$HPA_RECOMMENDATION_SOURCE}}",metric_source="{{$HPA_METRIC_SOURCE}}"}[%v])) by (le))
+          threshold: {{$HPA_LATENCY_SLO}}
+          requireSamples: true
+  - Identifier: HPAResyncLatencySLO
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: HPA Resync Loop Latency
+      metricVersion: v1
+      unit: s
+      queries:
+        - name: ResyncLatency
+          query: histogram_quantile(0.99, sum(rate(vpa_recommender_hpa_resync_loop_latency_seconds_bucket[%v])) by (le))
+          threshold: {{$HPA_RESYNC_LATENCY_SLO}}
+          requireSamples: true
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+
+- name: Starting saturation pod measurements
+  measurements:
+  - Identifier: SaturationPodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = saturation
+      threshold: {{$saturationDeploymentTimeout}}s
+  - Identifier: WaitForRunningSaturationDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = saturation
+      operationTimeout: {{$saturationDeploymentHardTimeout}}s
+  - Identifier: SchedulingThroughput
+    Method: SchedulingThroughput
+    Params:
+      action: start
+      labelSelector: group = saturation
+
+{{if $IS_LOAD_BALANCER_AUTOSCALING_TEST}}
+- module:
+    path: hpa-lb/modules/create-resources.yaml
+    params:
+      lbHttpRoutesPerGateway: {{$lbHttpRoutesPerGateway}}
+      namespaces: {{$namespaces}}
+{{else}}
+- module:
+    path: hpa-cpu/modules/create-resources.yaml
+    params:
+      totalPods: {{$totalPods}}
+      bigHPAs: {{$bigHPAs}}
+      bigHPAsPerNamespace: {{$bigHPAsPerNamespace}}
+      bigHPAsNamespaces: {{$bigHPAsNamespaces}}
+      smallHPAs: {{$smallHPAs}}
+      smallHPAsPerNamespace: {{$smallHPAsPerNamespace}}
+      namespaces: {{$namespaces}}
+{{end}}
+
+- name: Waiting for saturation pods to be running
+  measurements:
+  - Identifier: WaitForRunningSaturationDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Collecting saturation pod measurements
+  measurements:
+  - Identifier: SaturationPodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather
+  - Identifier: SchedulingThroughput
+    Method: SchedulingThroughput
+    Params:
+      action: gather
+      threshold: {{$SCHEDULER_THROUGHPUT_THRESHOLD}}
+
+- name: Wait 20min
+  measurements:
+  - Identifier: Wait
+    Method: Sleep
+    Params:
+      duration: 20m
+
+{{if $IS_LOAD_BALANCER_AUTOSCALING_TEST}}
+- module:
+    path: hpa-lb/modules/delete-resources.yaml
+    params:
+      lbHttpRoutesPerGateway: {{$lbHttpRoutesPerGateway}}
+      namespaces: {{$namespaces}}
+{{else}}
+- module:
+    path: hpa-cpu/modules/delete-resources.yaml
+    params:
+      bigHPAsNamespaces: {{$bigHPAsNamespaces}}
+      namespaces: {{$namespaces}}
+{{end}}
+
+- name: Waiting for saturation pods to be deleted
+  measurements:
+  - Identifier: WaitForRunningSaturationDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+
+- name: Collecting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: gather
+      enableViolations: false
+      useSimpleLatencyQuery: true
+      summaryName: APIResponsivenessPrometheus_simple
+  {{if not $USE_SIMPLE_LATENCY_QUERY}}
+  - Identifier: APIResponsivenessPrometheus
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: gather
+  {{end}}
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: gather
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: gather
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      systemPodMetricsEnabled: {{$ENABLE_SYSTEM_POD_METRICS}}
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{YamlQuote $CLUSTER_OOMS_IGNORED_PROCESSES 4}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: {{$ENABLE_RESTART_COUNT_CHECK}}
+  - Identifier: HPARecommendationAgeSLO
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+  - Identifier: HPARecommendationLatencySLO
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+  - Identifier: HPAResyncLatencySLO
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      enableViolations: true
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60

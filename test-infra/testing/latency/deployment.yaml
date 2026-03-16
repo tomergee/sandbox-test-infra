@@ -1,0 +1,72 @@
+{{$MemoryRequest := DefaultParam .MemoryRequest "500Mi"}}
+{{$EphemeralStorageRequest := DefaultParam .EphemeralStorageRequest "100Mi"}}
+
+{{$CpuRequest := DefaultParam .CpuRequest "250m"}}
+{{if .EnforceOnePodPerNode }}
+# PodAntiAffinity requires at least 500m of cpu request
+{{$CpuRequest = DefaultParam .CpuRequest "500m"}}
+{{end}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: {{.Group}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: {{.Group}}
+        name: {{.Name}}
+    spec:
+{{if ne .ComputeClass "general"}}
+      nodeSelector:
+        cloud.google.com/compute-class: "{{.ComputeClass}}"
+{{if eq .ComputeClass "Accelerator"}}
+        cloud.google.com/gke-accelerator: "{{.AcceleratorType}}"
+{{end}}
+{{end}}
+      containers:
+      - image: k8s.gcr.io/pause:3.1
+        name: {{.Name}}
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            memory: {{$MemoryRequest}}
+            ephemeral-storage: {{$EphemeralStorageRequest}}
+          limits:
+{{if eq .ComputeClass "Accelerator"}}
+            nvidia.com/gpu: {{.AcceleratorCount}}
+{{end}}
+            cpu: {{$CpuRequest}}
+            memory: {{$MemoryRequest}}
+            ephemeral-storage: {{$EphemeralStorageRequest}}
+{{if .EnforceOnePodPerNode}}
+      affinity:
+        podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                - key: group
+                  operator: In
+                  values:
+                  - {{.Group}}
+              topologyKey: kubernetes.io/hostname
+{{end}}
+      terminationGracePeriodSeconds: 1
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900

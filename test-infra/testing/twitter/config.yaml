@@ -1,0 +1,432 @@
+{{$ALLOWED_SLOW_API_CALLS := DefaultParam .CL2_ALLOWED_SLOW_API_CALLS 0}}
+{{$SCALE_FACTOR := DefaultParam .CL2_SCALE_FACTOR 1}}
+{{$ENABLE_SECRETS := DefaultParam .CL2_ENABLE_SECRETS true}}
+{{$ENABLE_CRONJOBS := DefaultParam .CL2_ENABLE_CRONJOBS true}}
+{{$ENABLE_MICROSERVICES := DefaultParam .CL2_ENABLE_MICROSERVICES true}}
+{{$ENABLE_STATEFULSETS := DefaultParam .CL2_ENABLE_STATEFULSETS true}}
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER true}}
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}}
+{{$ENABLE_SYSTEM_POD_METRICS := DefaultParam .ENABLE_SYSTEM_POD_METRICS true}}
+{{$ENABLE_RESTART_COUNT_CHECK := DefaultParam .ENABLE_RESTART_COUNT_CHECK true}}
+{{$RESTART_COUNT_THRESHOLD_OVERRIDES:= DefaultParam .RESTART_COUNT_THRESHOLD_OVERRIDES ""}}
+{{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS := DefaultParam .CL2_ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS true}}
+{{$ENABLE_API_AVAILABILITY_MEASUREMENT := DefaultParam .CL2_ENABLE_API_AVAILABILITY_MEASUREMENT false}}
+{{$API_AVAILABILITY_PERCENTAGE_THRESHOLD := DefaultParam .CL2_API_AVAILABILITY_PERCENTAGE_THRESHOLD 0.0}}
+{{$CUSTOM_API_CALL_THRESHOLDS := DefaultParam .CUSTOM_API_CALL_THRESHOLDS ""}}
+{{$ENABLE_CONTAINER_RESTARTS_MEASUREMENT := DefaultParam .CL2_ENABLE_CONTAINER_RESTARTS_MEASUREMENT false}}
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}}
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}}
+
+# Command to be executed
+{{$EXEC_COMMAND := DefaultParam .CL2_EXEC_COMMAND nil}}
+{{$EXIT_AFTER_EXEC := DefaultParam .CL2_EXIT_AFTER_EXEC false}}
+{{$SLEEP_AFTER_EXEC_DURATION := DefaultParam .CL2_SLEEP_AFTER_EXEC_DURATION "0s"}}
+
+name: load # Name is load, because perfdash can only parse load/density tests names
+namespace:
+  number: 600
+tuningSets:
+- name: 100qps
+  GlobalQPSLoad:
+    qps: 100
+    burst: 10
+- name: RandomizedUpdateTimeLimited
+  RandomizedTimeLimitedLoad:
+    timeLimit: 2h
+steps:
+- name: Starting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: start
+  # TODO(oxddr): figure out how many probers to run in function of cluster
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt .Nodes 100)}}
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt .Nodes 100)}}
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      nodeMode: master
+      systemPodMetricsEnabled: {{$ENABLE_SYSTEM_POD_METRICS}}
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{$CLUSTER_OOMS_IGNORED_PROCESSES}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: {{$ENABLE_RESTART_COUNT_CHECK}}
+- name: Starting measurement for waiting for pods
+  measurements:
+  - Identifier: WaitForRunningMicroservices
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = services
+      operationTimeout: 1h
+  {{if $ENABLE_STATEFULSETS}}
+  - Identifier: WaitForRunningStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: StatefulSet
+      labelSelector: group = statefulsets
+      # TODO(maciejborsz): Change this once we improve scalability of statefulsets.
+      operationTimeout: 1h
+  {{end}}
+  {{if $ENABLE_API_AVAILABILITY_MEASUREMENT}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: start
+      pollFrequency: "5s"
+      hostPollTimeoutSeconds: 5
+      threshold: {{$API_AVAILABILITY_PERCENTAGE_THRESHOLD}}
+  {{end}}
+{{if $ENABLE_SECRETS}}
+- name: Create Secrets
+  phases:
+  {{range .SECRETS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: {{.count}}
+    tuningSet: 100qps
+    objectBundle:
+      - basename: secret
+        objectTemplatePath: secret.yaml
+  {{end}}
+{{end}}
+{{if $ENABLE_MICROSERVICES}}
+- name: Create Microservices
+  phases:
+  {{range .MICROSERVICES}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: {{.jobCount}}
+    tuningSet: 100qps
+    objectBundle:
+      - basename: {{.name}}
+        objectTemplatePath: microservice.yaml
+        templateFillMap:
+          Cores: {{DivideFloat .cores $SCALE_FACTOR}}
+          InstanceCount: {{.instanceCount}}
+          UpdatedReplicas: 0
+          Secrets:
+          {{if $ENABLE_SECRETS}}
+            {{range .secrets}}
+              - {{.}}
+            {{end}}
+          {{end}}
+  {{end}}
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningMicroservices
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{end}}
+{{if $ENABLE_CRONJOBS}}
+- name: Create Cronjobs
+  phases:
+  {{range .CRONJOBS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: {{.jobCount}}
+    tuningSet: 100qps
+    objectBundle:
+      - basename: {{.name}}
+        objectTemplatePath: cronjob.yaml
+        templateFillMap:
+          Cores: {{DivideFloat .cores $SCALE_FACTOR}}
+          InstanceCount: {{.instanceCount}}
+          IntervalMins: {{.intervalMins}}
+  {{end}}
+{{end}}
+{{if $ENABLE_STATEFULSETS}}
+- name: Create StorageClass
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: 100qps
+    objectBundle:
+      - basename: dynamic
+        objectTemplatePath: storageclass-dynamic.yaml
+- name: Create StatefulSets
+  phases:
+  {{range .STATEFULSETS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: 1
+    tuningSet: 100qps
+    objectBundle:
+      - basename: statefulset
+        objectTemplatePath: statefulset.yaml
+        templateFillMap:
+          InstanceCount: {{.instanceCount}}
+  {{end}}
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{end}}
+{{if $EXEC_COMMAND}}
+{{if $ENABLE_API_AVAILABILITY_MEASUREMENT}}
+- name: Pausing APIAvailability measurement
+  measurements:
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: pause
+{{end}}
+- name: Exec command
+  measurements:
+  - Identifier: ExecCommand
+    Method: Exec
+    Params:
+      command:
+      {{range $EXEC_COMMAND}}
+      - {{.}}
+      {{end}}
+{{if $ENABLE_API_AVAILABILITY_MEASUREMENT}}
+- name: Unpausing APIAvailability measurement
+  measurements:
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: unpause
+{{end}}
+- name: Sleep
+  measurements:
+  - Identifier: WaitAfterExec
+    Method: Sleep
+    Params:
+      duration: {{$SLEEP_AFTER_EXEC_DURATION}}
+{{end}}
+
+{{if not $EXIT_AFTER_EXEC}}
+
+{{if $ENABLE_MICROSERVICES}}
+- name: Update Microservices
+  phases:
+  {{range .MICROSERVICES}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: {{.jobCount}}
+    tuningSet: RandomizedUpdateTimeLimited
+    objectBundle:
+      - basename: {{.name}}
+        objectTemplatePath: microservice.yaml
+        templateFillMap:
+          Cores: {{DivideFloat .cores $SCALE_FACTOR}}
+          InstanceCount: {{.instanceCount}}
+          UpdatedReplicas: {{.updatesCount}}
+          Secrets:
+          {{if $ENABLE_SECRETS}}
+            {{range .secrets}}
+              - {{.}}
+            {{end}}
+          {{end}}
+  {{end}}
+- name: Waiting for objects become updated
+  measurements:
+  - Identifier: WaitForRunningMicroservices
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{end}}
+{{if $ENABLE_STATEFULSETS}}
+- name: Delete StatefulSets
+  phases:
+  {{range .STATEFULSETS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: 0
+    tuningSet: 100qps
+    objectBundle:
+      - basename: statefulset
+        objectTemplatePath: statefulset.yaml
+  {{end}}
+- name: Delete PVCs
+  phases:
+  {{range .STATEFULSETS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: 0
+    tuningSet: 100qps
+    objectBundle:
+      - basename: pv-statefulset-0
+        objectTemplatePath: pvc.yaml
+        listUnknownObjectOptions:
+          labelSelector:
+            matchLabels:
+              name: statefulset-0
+  {{end}}
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+- name: Delete StorageClass
+  phases:
+  - replicasPerNamespace: 0
+    tuningSet: 100qps
+    objectBundle:
+      - basename: dynamic
+        objectTemplatePath: storageclass-dynamic.yaml
+- name: Waiting for PVCs to be deleted
+  measurements:
+  - Identifier: WaitForPVCsToBeDeleted
+    Method: WaitForBoundPVCs
+    Params:
+      desiredPVCCount: 0
+      labelSelector: group = statefulsets
+      timeout: 1h
+{{end}}
+{{if $ENABLE_CRONJOBS}}
+- name: Delete Cronjobs
+  phases:
+  {{range .CRONJOBS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: 0
+    tuningSet: 100qps
+    objectBundle:
+      - basename: {{.name}}
+        objectTemplatePath: cronjob.yaml
+  {{end}}
+{{end}}
+{{if $ENABLE_MICROSERVICES}}
+- name: Delete Microservices
+  phases:
+  {{range .MICROSERVICES}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: 0
+    tuningSet: 100qps
+    objectBundle:
+      - basename: {{.name}}
+        objectTemplatePath: microservice.yaml
+  {{end}}
+- name: Waiting for pods to be deleted
+  measurements:
+  - Identifier: WaitForRunningMicroservices
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{end}}
+{{if $ENABLE_SECRETS}}
+- name: Delete Secrets
+  phases:
+  {{range .SECRETS}}
+  - namespaceRange:
+      min: {{.namespace}}
+      max: {{.namespace}}
+    replicasPerNamespace: 0
+    tuningSet: 100qps
+    objectBundle:
+      - basename: secret
+        objectTemplatePath: secret.yaml
+  {{end}}
+{{end}}
+
+{{end}} # not EXIT_AFTER_EXEC
+
+- name: Collecting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: gather
+      enableViolations: {{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS}}
+      allowedSlowCalls: {{$ALLOWED_SLOW_API_CALLS}}
+      customThresholds: {{YamlQuote $CUSTOM_API_CALL_THRESHOLDS 4}}
+      useSimpleLatencyQuery: true
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: gather
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: gather
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      systemPodMetricsEnabled: true
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: {{$ENABLE_RESTART_COUNT_CHECK}}
+  {{if $ENABLE_API_AVAILABILITY_MEASUREMENT}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: gather
+  {{end}}
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60

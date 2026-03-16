@@ -1,0 +1,93 @@
+{{$tuningSet := .tuningSet}}
+
+{{$namespaces := .namespaces}}
+
+# DaemonSets
+{{$daemonSetsPerNamespace := .daemonSetsPerNamespace}}
+
+# Deployments
+{{$deploymentsPerNamespace := .deploymentsPerNamespace}}
+{{$deploymentSize := .deploymentSize}}
+
+# Jobs
+{{$jobsPerNamespace := .jobsPerNamespace}}
+
+steps:
+- name: Starting measurement for stateless workloads
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDaemonSets
+      Params:
+        apiVersion: apps/v1
+        kind: DaemonSet
+    - Identifier: WaitForRunningDeployments
+      Params:
+        apiVersion: apps/v1
+        kind: Deployment
+    - Identifier: WaitForRunningJobs
+      Params:
+        apiVersion: batch/v1
+        kind: Job
+    Params:
+      action: start
+      checkIfPodsAreUpdated: true
+      labelSelector: gkebackup = stateless-workload
+      operationTimeout: 300m
+
+- name: Creating DaemonSet
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    tuningSet: {{$tuningSet}}
+    replicasPerNamespace: {{$daemonSetsPerNamespace}}
+    objectBundle:
+    - basename: daemon
+      objectTemplatePath: daemonset.yaml
+
+- name: Creating Deployment
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    tuningSet: {{$tuningSet}}
+    replicasPerNamespace: {{$deploymentsPerNamespace}}
+    objectBundle:
+    - basename: deploy
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$deploymentSize}}
+
+- name: Creating Jobs
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    tuningSet: {{$tuningSet}}
+    replicasPerNamespace: {{$jobsPerNamespace}}
+    objectBundle:
+    - basename: job
+      objectTemplatePath: job.yaml
+
+- name: Waiting for stateless workloads to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDaemonSets
+    - Identifier: WaitForRunningDeployments
+    - Identifier: WaitForRunningJobs
+    Params:
+      action: gather
+
+# After all Pods up and running, do not need to measure as disruptive restore
+# will eventually delete those.
+- name: Stopping measurement for stateless workloads
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDaemonSets
+    - Identifier: WaitForRunningDeployments
+    - Identifier: WaitForRunningJobs
+    Params:
+      action: stop

@@ -1,0 +1,678 @@
+# ==============================================================================
+# ClusterLoader2 Priority & Preemption Test Module
+#
+# This module defines steps to test Kueue's priority and preemption features.
+# It sets up a namespace and queues, submits workloads with different priorities
+# (low-priority batch, medium-priority training, high-priority inference),
+# scales the high-priority workload to induce preemption, checks for recovery
+# of lower-priority workloads, and then cleans up all resources.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Input Parameters & Calculated Variables
+# ------------------------------------------------------------------------------
+{{$Namespace := .Namespace}}                     # Base name for the namespace created in the test.
+
+{{$Multiplier := .CL2_MULTIPLIER}}               # A multiplier used for scaling resource requests and workload counts.
+
+{{$BIND_PORT := DefaultParam .CL2_BIND_PORT false}} # Whether workloads should bind a host port.
+{{$CpuRequest := DefaultParam .CL2_CPU_REQUEST "0.3"}} # Base CPU request per pod/replica.
+{{$SleepDuration := DefaultParam .CL2_SLEEP_DURATION "30s"}} # Default sleep duration used by the common module after workload steps.
+
+# --- Queue Configuration ---
+# Calculate nominal quota based on multiplier and base CPU request.
+# 10 is a constant used to calculate total number of pods, where # Pods = Multiplier * 10
+{{$NOMINAL_QUOTA := MultiplyFloat $Multiplier $CpuRequest 10}}
+
+# --- Workload Configuration ---
+# Batch Workloads (Low Priority)
+{{$SMALL_BATCH_WORKLOAD_REPLICAS := 0}} # Set to 0 to disable small batch in this config.
+{{$MEDIUM_BATCH_WORKLOAD_REPLICAS := DivideInt $Multiplier 10}} # Number of medium batch Job objects.
+{{$LARGE_BATCH_WORKLOAD_REPLICAS := DivideInt $Multiplier 50}} # Number of large batch Job objects.
+
+{{if lt $Multiplier 10}}
+{{$SMALL_BATCH_WORKLOAD_REPLICAS = $Multiplier}} # Set to 0 to disable small batch in this config.
+{{$MEDIUM_BATCH_WORKLOAD_REPLICAS = 0}} # Number of medium batch Job objects.
+{{$LARGE_BATCH_WORKLOAD_REPLICAS = 0}} # Number of large batch Job objects.
+{{end}}
+
+{{$SMALL_BATCH_WORKLOAD_SIZE := 10}}             # Pods per small batch Job.
+{{$MEDIUM_BATCH_WORKLOAD_SIZE := 50}}            # Pods per medium batch Job.
+{{$LARGE_BATCH_WORKLOAD_SIZE := 250}}            # Pods per large batch Job.
+
+# Training Workloads (Medium Priority)
+{{$TRAINING_WORKLOAD_REPLICAS := 5}}             # Number of training Job objects.
+{{$TRAINING_WORKLOAD_SIZE := $Multiplier}}       # Pods per training Job.
+
+# Inference Workloads (High Priority)
+{{$INFERENCE_WORKLOAD_SIZE := $Multiplier}}      # Pods per inference replica/set.
+{{$INFERENCE_WORKLOAD_REDUCED_REPLICA := 2}}     # Number of inference replicas/sets after scale-down.
+{{$INFERENCE_WORKLOAD_INCREASE_STEPS := 5}}      # Number of steps to increase inference workload replicas.
+
+# Calculate expected remaining batch pods after high-priority workloads scale down.
+# Assumes total capacity = 10 * Multiplier (based on NOMINAL_QUOTA calculation logic).
+# Subtracts resources used by training and the final scaled-down inference workload.
+{{$TOTAL_BATCH_REMAINING_BULK := SubtractInt (MultiplyInt 10 $Multiplier) (AddInt (MultiplyInt $TRAINING_WORKLOAD_REPLICAS $TRAINING_WORKLOAD_SIZE) (MultiplyInt $INFERENCE_WORKLOAD_SIZE $INFERENCE_WORKLOAD_REDUCED_REPLICA))}}
+# Calculate how many medium batch pods should fit in the remaining bulk capacity.
+{{$TOTAL_BATCH_REMAINING := MultiplyInt $MEDIUM_BATCH_WORKLOAD_SIZE (DivideInt $TOTAL_BATCH_REMAINING_BULK $MEDIUM_BATCH_WORKLOAD_SIZE)}} # assuming no small batch workloads
+{{if lt $Multiplier 10}}
+{{$TOTAL_BATCH_REMAINING = MultiplyInt $SMALL_BATCH_WORKLOAD_SIZE (DivideInt $TOTAL_BATCH_REMAINING_BULK $SMALL_BATCH_WORKLOAD_SIZE)}} # assuming only small batch workloads
+{{end}}
+# Priority Classes (Passed into this module)
+{{$priorityClassHigh := .priorityClassHigh}}
+{{$priorityClassMedium := .priorityClassMedium}}
+{{$priorityClassLow := .priorityClassLow}}
+
+# --- Measurement & Environment Configuration ---
+{{$ThroughputThreshold := DefaultParam .ThroughputThreshold 100}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{if lt $Multiplier 500}}
+{{$ThroughputThreshold = DefaultParam .ThroughputThreshold 50}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{end}}
+{{if lt $Multiplier 10}}
+{{$ThroughputThreshold = DefaultParam .ThroughputThreshold -1}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{end}}
+{{$PodStartupLatencyThreshold := DefaultParam .PodStartupLatencyThreshold "1m"}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+{{$USE_DEPLOYMENT_FOR_INFERENCE := DefaultParam .CL2_USE_DEPLOYMENT_FOR_INFERENCE false}} # Toggle between Deployment/LWS for inference.
+
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+
+# ------------------------------------------------------------------------------
+# Phase 2: Initialization and Setup
+# ------------------------------------------------------------------------------
+
+- name: "Phase 2 - Init 0: Create Namespace {{$Namespace}}-0"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$Namespace}}
+        objectTemplatePath: common/namespace.yaml
+
+- name: "Phase 2 - Init 1: Create ClusterQueue (priority-main-queue-0) with Nominal Quota {{$NOMINAL_QUOTA}}"
+  phases:
+  - namespaceList: [""] # ClusterQueues are cluster-scoped.
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: priority-main-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        Preemption: true
+
+- name: "Phase 2 - Init 2: Create LocalQueue (priority-local-queue-0)"
+  phases:
+  - namespaceList:
+    - "{{$Namespace}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: priority-local-queue
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        ClusterQueue: priority-main-queue-0
+
+# ------------------------------------------------------------------------------
+# Phase 2: Submit Low Priority Batch Workloads
+# ------------------------------------------------------------------------------
+
+{{if (gt $SMALL_BATCH_WORKLOAD_REPLICAS 0)}}
+- name: "Phase 2 - Step 2: Run Small Batch Workloads ({{$SMALL_BATCH_WORKLOAD_REPLICAS}} Jobs, Low Priority)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Small Batch Workloads"
+      StepId: BatchWorkloadsSmall
+      Group: batch-workload-small
+      WorkloadName: batch-job-small
+      WorkloadType: batch
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step 2"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$SMALL_BATCH_WORKLOAD_SIZE}}
+      Replicas: {{$SMALL_BATCH_WORKLOAD_REPLICAS}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}} # Low priority
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false                          # Don't delete yet, wait for preemption/recovery.
+      DesiredRunningPods: {{MultiplyInt $SMALL_BATCH_WORKLOAD_REPLICAS $SMALL_BATCH_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase2"
+      create: true
+{{end}}
+
+{{if (gt $MEDIUM_BATCH_WORKLOAD_REPLICAS 0)}}
+- name: "Phase 2 - Step 3: Run Medium Batch Workloads ({{$MEDIUM_BATCH_WORKLOAD_REPLICAS}} Jobs, Low Priority)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Medium Batch Workloads"
+      StepId: BatchWorkloadsMedium
+      Group: batch-workload-medium
+      WorkloadName: batch-job-medium
+      WorkloadType: batch
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step 3"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$MEDIUM_BATCH_WORKLOAD_SIZE}}
+      Replicas: {{$MEDIUM_BATCH_WORKLOAD_REPLICAS}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}} # Low priority
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      DesiredRunningPods: {{MultiplyInt $MEDIUM_BATCH_WORKLOAD_REPLICAS $MEDIUM_BATCH_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase2"
+      create: true # Ensure creation step runs
+{{end}}
+
+{{if (gt $LARGE_BATCH_WORKLOAD_REPLICAS 0)}}
+- name: "Phase 2 - Step 4: Run Large Batch Workloads ({{$LARGE_BATCH_WORKLOAD_REPLICAS}} Jobs, Low Priority)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Large Batch Workloads"
+      StepId: BatchWorkloadsLarge
+      Group: batch-workload-large
+      WorkloadName: batch-job-large
+      WorkloadType: batch
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step 4"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$LARGE_BATCH_WORKLOAD_SIZE}}
+      Replicas: {{$LARGE_BATCH_WORKLOAD_REPLICAS}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}} # Low priority
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      DesiredRunningPods: {{MultiplyInt $LARGE_BATCH_WORKLOAD_REPLICAS $LARGE_BATCH_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase2"
+      create: true # Ensure creation step runs
+{{end}}
+
+# ------------------------------------------------------------------------------
+# Phase 2: Submit Medium Priority Training Workloads
+# ------------------------------------------------------------------------------
+
+- name: "Phase 2 - Step 5: Run Training Workloads ({{$TRAINING_WORKLOAD_REPLICAS}} Jobs, Medium Priority)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Training Workloads"
+      StepId: TrainingWorkloads
+      Group: training-workload
+      WorkloadName: training-job
+      WorkloadType: training
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step 5"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$TRAINING_WORKLOAD_SIZE}}
+      Replicas: {{$TRAINING_WORKLOAD_REPLICAS}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}} # Medium priority
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      DesiredRunningPods: {{MultiplyInt $TRAINING_WORKLOAD_REPLICAS $TRAINING_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false
+      Timeout: "10m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase2"
+      create: true # Ensure creation step runs
+
+# ------------------------------------------------------------------------------
+# Phase 2: Incrementally Scale High Priority Inference Workloads (Induce Preemption)
+# ------------------------------------------------------------------------------
+
+{{if $USE_DEPLOYMENT_FOR_INFERENCE}} # --- Using Deployment for Inference ---
+{{range $j := Loop $INFERENCE_WORKLOAD_INCREASE_STEPS}}
+- name: "Phase 2 - Step {{AddInt 6 $j}}: Scale Inference Deployment (High Priority) - Step {{$j}}"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Inference Workloads Scale Up"
+      StepId: InferenceWorkloads-{{$j}}
+      Group: inference-workload
+      WorkloadName: inference-deployment       # Basename for the Deployment.
+      WorkloadType: inference
+      TemplatePath: common/deployment.yaml   # Use Deployment template.
+      Phase: "Phase 2"
+      Step: "Step {{AddInt 6 $j}}"
+      Namespace: "{{$Namespace}}-0"
+      ApiVersion: "apps/v1"                # API version for Deployment.
+      Kind: "Deployment"                   # Kind is Deployment.
+      # --- Sizing & Resources ---
+      Size: {{$INFERENCE_WORKLOAD_SIZE}}       # Pods per replica (used in template?).
+      Replicas: {{MultiplyInt 2 (AddInt $j 1)}} # Incrementally increase replicas.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}    # High priority
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      InObjectReplicas: false
+      DesiredRunningPods: {{MultiplyInt $INFERENCE_WORKLOAD_SIZE (MultiplyInt 2 (AddInt $j 1))}}
+      WaitForControlledPodsRunning: false
+      Timeout: "10m"
+      ThroughputThreshold: 0 # Don't measure scheduling throughput
+      PodStartupLatencyThreshold: "" # Don't measure pod startup latency
+      DiagnosticsPhase: "phase2"
+      create: true # Ensure creation/update step runs
+{{end}}
+
+# --- Scale Down Inference Deployment ---
+- name: "Phase 2 - Step {{AddInt 6 $INFERENCE_WORKLOAD_INCREASE_STEPS}}: Scale Down Inference Deployment (High Priority)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Inference Workloads Scale Down"
+      StepId: InferenceWorkloadsScaleDown
+      Group: inference-workload
+      WorkloadName: inference-deployment
+      WorkloadType: inference
+      TemplatePath: common/deployment.yaml
+      Phase: "Phase 2"
+      Step: "Step {{AddInt 6 $INFERENCE_WORKLOAD_INCREASE_STEPS}}"
+      Namespace: "{{$Namespace}}-0"
+      ApiVersion: "apps/v1"
+      Kind: "Deployment"
+      # --- Sizing & Resources ---
+      Size: {{$INFERENCE_WORKLOAD_SIZE}}
+      Replicas: {{$INFERENCE_WORKLOAD_REDUCED_REPLICA}} # Scale down to final replica count.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      InObjectReplicas: false
+      DesiredRunningPods: {{MultiplyInt $INFERENCE_WORKLOAD_SIZE $INFERENCE_WORKLOAD_REDUCED_REPLICA}}
+      WaitForControlledPodsRunning: false
+      Timeout: "10m"
+      ThroughputThreshold: 0 # Don't measure scheduling throughput
+      PodStartupLatencyThreshold: "" # Don't measure pod startup latency
+      DiagnosticsPhase: "phase2"
+      create: true # Ensure update step runs
+
+{{else}} # --- Using LeaderWorkerSet for Inference ---
+{{range $j := Loop $INFERENCE_WORKLOAD_INCREASE_STEPS}}
+- name: "Phase 2 - Step {{AddInt 6 $j}}: Scale Inference LWS (High Priority) - Step {{$j}}"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Inference Workloads Scale Up"
+      StepId: InferenceWorkloads-{{$j}}
+      Group: inference-workload
+      WorkloadName: inference-lws
+      WorkloadType: inference
+      TemplatePath: common/lws.yaml
+      Phase: "Phase 2"
+      Step: "Step {{AddInt 6 $j}}"
+      Namespace: "{{$Namespace}}-0"
+      ApiVersion: "leaderworkerset.x-k8s.io/v1"
+      Kind: "LeaderWorkerSet"
+      # --- Sizing & Resources ---
+      Size: {{$INFERENCE_WORKLOAD_SIZE}}       # Workers per set (group).
+      Replicas: {{MultiplyInt 2 (AddInt $j 1)}} # Incrementally increase number of sets.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      InObjectReplicas: true                 # Replicas (number of sets) are set *in* the LWS spec.
+      # Desired pods = (Size workers) * Replicas (number of sets)
+      DesiredRunningPods: {{MultiplyInt $INFERENCE_WORKLOAD_SIZE (MultiplyInt 2 (AddInt $j 1))}}
+      WaitForControlledPodsRunning: false
+      Timeout: "30m" # LWS behaves worse than deployment
+      ThroughputThreshold: 0 # Don't measure scheduling throughput
+      PodStartupLatencyThreshold: "" # Don't measure pod startup latency
+      DiagnosticsPhase: "phase2"
+      create: true
+{{end}}
+
+# --- Scale Down Inference LWS ---
+- name: "Phase 2 - Step {{AddInt 6 $INFERENCE_WORKLOAD_INCREASE_STEPS}}: Scale Down Inference LWS (High Priority)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Inference Workloads Scale Down"
+      StepId: InferenceWorkloadsScaleDown
+      Group: inference-workload
+      WorkloadName: inference-lws
+      WorkloadType: inference
+      TemplatePath: common/lws.yaml
+      Phase: "Phase 2"
+      Step: "Step {{AddInt 6 $INFERENCE_WORKLOAD_INCREASE_STEPS}}"
+      Namespace: "{{$Namespace}}-0"
+      ApiVersion: "leaderworkerset.x-k8s.io/v1"
+      Kind: "LeaderWorkerSet"
+      # --- Sizing & Resources ---
+      Size: {{$INFERENCE_WORKLOAD_SIZE}}
+      Replicas: {{$INFERENCE_WORKLOAD_REDUCED_REPLICA}} # Scale down number of sets.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false
+      InObjectReplicas: true
+      DesiredRunningPods: {{MultiplyInt $INFERENCE_WORKLOAD_SIZE $INFERENCE_WORKLOAD_REDUCED_REPLICA}}
+      WaitForControlledPodsRunning: false
+      Timeout: "30m" # LWS behaves worse than deployment
+      ThroughputThreshold: 0 # Don't measure scheduling throughput
+      PodStartupLatencyThreshold: "" # Don't measure pod startup latency
+      DiagnosticsPhase: "phase2"
+      create: true
+{{end}}
+
+# ------------------------------------------------------------------------------
+# Phase 2: Wait for Lower Priority Workloads to Recover
+# ------------------------------------------------------------------------------
+
+- name: "Phase 2 - Step Final: Wait for Batch and Training workloads to recover post-preemption"
+  measurements:
+    # Wait for the expected number of batch pods.
+    - Method: WaitForRunningPods
+      Identifier: WaitForDesiredCountRunningBatchWorkloads
+      Params:
+        action: gathe
+        timeout: "30m"
+        desiredPodCount: {{$TOTAL_BATCH_REMAINING}} # Calculated expected running batch pods.
+        labelSelector: type=batch # Selects all batch pods.
+        namespace: "{{$Namespace}}-0"
+    # Wait for all training pods to be running again.
+    - Method: WaitForRunningPods
+      Identifier: WaitForDesiredCountRunningTrainWorkloads
+      Params:
+        action: gather
+        timeout: "30m"
+        desiredPodCount: {{MultiplyInt $TRAINING_WORKLOAD_REPLICAS $TRAINING_WORKLOAD_SIZE}}
+        labelSelector: type=training # Selects all training pods.
+        namespace: "{{$Namespace}}-0"
+
+# ------------------------------------------------------------------------------
+# Phase 2: Workload Cleanup Steps
+# ------------------------------------------------------------------------------
+
+# --- Cleanup Batch Workloads ---
+{{if (gt $SMALL_BATCH_WORKLOAD_REPLICAS 0)}}
+- name: "Phase 2 - Cleanup Batch Small"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Small Batch Workloads Cleanup"
+      StepId: BatchWorkloadsSmallCleanup
+      Group: batch-workload-small
+      WorkloadName: batch-job-small
+      WorkloadType: batch
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step cleanup batch small"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$SMALL_BATCH_WORKLOAD_SIZE}}
+      Replicas: 0 # Set replicas to 0 for deletion via module.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "2m" # No sleep needed for cleanup usually.
+      BindPort: {{$BIND_PORT}}
+      delete: true # Explicitly trigger deletion logic in module.
+      create: false # Skip creation logic.
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase2"
+{{end}}
+
+{{if (gt $MEDIUM_BATCH_WORKLOAD_REPLICAS 0)}}
+- name: "Phase 2 - Cleanup Batch Medium"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Medium Batch Workloads Cleanup"
+      StepId: BatchWorkloadsMediumCleanup
+      Group: batch-workload-medium
+      WorkloadName: batch-job-medium
+      WorkloadType: batch
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step cleanup batch medium"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$MEDIUM_BATCH_WORKLOAD_SIZE}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "2m"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase2"
+{{end}}
+
+{{if (gt $LARGE_BATCH_WORKLOAD_REPLICAS 0)}}
+- name: "Phase 2 - Cleanup Batch Large"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Large Batch Workloads Cleanup"
+      StepId: BatchWorkloadsLargeCleanup
+      Group: batch-workload-large
+      WorkloadName: batch-job-large
+      WorkloadType: batch
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step cleanup batch large"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$LARGE_BATCH_WORKLOAD_SIZE}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "2m"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase2"
+{{end}}
+
+
+# --- Cleanup Training Workloads ---
+- name: "Phase 2 - Cleanup Training Workloads"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Training Workloads Cleanup"
+      StepId: TrainingWorkloadsCleanup
+      Group: training-workload
+      WorkloadName: training-job
+      WorkloadType: training
+      TemplatePath: common/job.yaml
+      Phase: "Phase 2"
+      Step: "Step cleanup train"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$TRAINING_WORKLOAD_SIZE}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "2m"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase2"
+
+# --- Cleanup Inference Workloads ---
+{{if $USE_DEPLOYMENT_FOR_INFERENCE}}
+- name: "Phase 2 - Cleanup Inference Deployment"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Inference Workloads Cleanup"
+      StepId: InferenceWorkloadsCleanup
+      Group: inference-workload
+      WorkloadName: inference-deployment
+      WorkloadType: inference
+      TemplatePath: common/deployment.yaml
+      Phase: "Phase 2"
+      Step: "Step cleanup inference"
+      Namespace: "{{$Namespace}}-0"
+      ApiVersion: "apps/v1"
+      Kind: "Deployment"
+      # --- Sizing & Resources ---
+      Size: {{$INFERENCE_WORKLOAD_SIZE}}
+      Replicas: 0 # Set replicas to 0 for deletion.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "2m"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      InObjectReplicas: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      Timeout: "120m"
+      DiagnosticsPhase: "phase2"
+{{else}}
+- name: "Phase 2 - Cleanup Inference LWS"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Inference Workloads Cleanup"
+      StepId: InferenceWorkloadsCleanup
+      Group: inference-workload
+      WorkloadName: inference-lws
+      WorkloadType: inference
+      TemplatePath: common/lws.yaml
+      Phase: "Phase 2"
+      Step: "Step cleanup inference"
+      Namespace: "{{$Namespace}}-0"
+      ApiVersion: "leaderworkerset.x-k8s.io/v1"
+      Kind: "LeaderWorkerSet"
+      # --- Sizing & Resources ---
+      Size: {{$INFERENCE_WORKLOAD_SIZE}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}
+      QueueName: priority-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "2m"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      InObjectReplicas: true
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      Timeout: "120m"
+      DiagnosticsPhase: "phase2"
+{{end}}
+
+# ------------------------------------------------------------------------------
+# Phase 2: Infrastructure Teardown
+# ------------------------------------------------------------------------------
+
+# Note: Deleting namespace implicitly deletes namespaced resources like LocalQueue.
+- name: "Phase 2 - Teardown 1: Delete Namespace {{$Namespace}}-0"
+  phases:
+  - replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$Namespace}}
+        objectTemplatePath: common/namespace.yaml
+
+# Deleting cluster-scoped resources like ClusterQueue explicitly.
+- name: "Phase 2 - Teardown 2: Delete ClusterQueue (priority-main-queue-0)"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: priority-main-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        Preemption: true

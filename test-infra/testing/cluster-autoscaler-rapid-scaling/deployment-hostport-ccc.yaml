@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    app: {{.BaseName}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      app: {{.BaseName}}
+  template:
+    metadata:
+      labels:
+        app: {{.BaseName}}
+    spec:
+{{if .UseHTScheduler}}
+      schedulerName: gke.io/high-throughput-scheduler
+{{end}}
+      nodeSelector:
+        cloud.google.com/compute-class: "app-cc-{{.Index}}"
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.10
+        ports:
+        - containerPort: 8080
+          hostPort: 8081  # requesting a host port leads to a single pod scheduled per node
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "{{.CpuRequest}}m"
+            memory: "{{.MemoryRequest}}Mi"

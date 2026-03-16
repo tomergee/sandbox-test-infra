@@ -1,0 +1,72 @@
+### This file is currently used only for ROX jobs. It provisions volume as a data source for volume cloning.
+
+# Pre-test Deployment
+# Pre-test deployment creates a deployment with a pod and volume. This volume (the one bound to pre-test deployment) is cloned to create a ReadOnly volume.
+# To clone a volume it is necessary to format the source volume -- https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/readonlymany-disks#formatting_the_persistent_disk
+# Using a deployment instead of standalone pod/pvc gives us more control on its lifecycle (e.g. WaitForControlledPodsRunning).
+{{$preTestDeploymentSize := .preTestDeploymentSize}}
+{{$preTestDeploymentsPerNamespace := DefaultParam .preTestDeploymentsPerNamespace 0}}
+
+
+## Input params
+# Valid actions: "create", "scale and update", "delete"
+{{$actionName := printf "%s objects" .actionName}}
+{{$namespaces := .namespaces}}
+{{$tuningSet := .tuningSet}}
+
+# Derivative variables
+{{$is_deleting := (eq .actionName "delete")}}
+
+## CL2 params
+{{$CHECK_IF_PODS_ARE_UPDATED := DefaultParam .CL2_CHECK_IF_PODS_ARE_UPDATED true}}
+
+steps:
+- name: Starting measurement for pre-test '{{$actionName}}'
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningPreDeployments
+      Params:
+        apiVersion: apps/v1
+        kind: Deployment
+    Params:
+      action: start
+      checkIfPodsAreUpdated: {{$CHECK_IF_PODS_ARE_UPDATED}}
+      labelSelector: group = pre-test
+      operationTimeout: 60m
+
+- name: Pre-test '{{$actionName}}'
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: {{$preTestDeploymentsPerNamespace}}
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+    - basename: pre-existing-volume
+      objectTemplatePath: sample-pvc.yaml
+      templateFillMap:
+        group: pre-test
+    - basename: pre-test-deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$preTestDeploymentSize}}
+        pvc_name: pre-existing-volume-0
+        group: pre-test
+
+- name:  Waiting for pre-test '{{$actionName}}' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningPreDeployments
+    Params:
+      action: gather
+
+{{if $is_deleting}}
+  - Identifier: WaitForPrePVCsToBeDeleted
+    Method: WaitForBoundPVCs
+    Params:
+      desiredPVCCount: 0
+      labelSelector: group = pre-test
+      timeout: 150m
+{{end}}

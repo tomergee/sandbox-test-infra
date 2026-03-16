@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: e2-scale-deployment
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      group: e2-scale-test
+  template:
+    metadata:
+      labels:
+        group: e2-scale-test
+    spec:
+      containers:
+        - name: pause
+          image: k8s.gcr.io/pause:3.1
+          resources:
+            requests:
+              cpu: "125m"
+              memory: "0.5Gi"
+          ports:
+            - containerPort: 8080
+              hostPort: 8080
+              protocol: TCP

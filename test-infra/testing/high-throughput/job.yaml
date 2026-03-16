@@ -1,0 +1,38 @@
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}}
+{{$MemoryRequest := DefaultParam .MemoryRequest "20M"}}
+{{$PodPayloadSize := DefaultParam .CL2_JOB_POD_PAYLOAD_SIZE "1024"}}
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}}
+{{$BackoffLimit := DefaultParam .BackoffLimit 6}}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.Name}}
+  labels:
+    name: {{.Name}}
+    group: load
+spec:
+  backoffLimit: {{$BackoffLimit}}
+  parallelism: {{.Replicas}}
+  completions: {{.Replicas}}
+  completionMode: {{.Mode}}
+  template:
+    metadata:
+      labels:
+        name: {{.Name}}
+        group: load
+    spec:
+      schedulerName: {{$SchedulerName}}
+      containers:
+      - name: {{.Name}}
+        image: gcr.io/k8s-staging-perf-tests/sleep:v0.0.3
+        args:
+          - {{.Sleep}}
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            memory: {{$MemoryRequest}}
+        env:
+        - name: ENV_VAR
+          value: {{RandData $PodPayloadSize}}
+      restartPolicy: Never

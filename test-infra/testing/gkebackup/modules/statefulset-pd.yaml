@@ -1,0 +1,89 @@
+{{$tuningSet := .tuningSet}}
+  
+# Valid actionName: "create", "delete"
+{{$actionName := .actionName}}
+{{$isDeletion := (eq .actionName "delete")}}
+
+{{$namespaces := .namespaces}}
+{{$statefulSetSize := .statefulSetSize}}
+{{$statefulSetsPerNamespace := .statefulSetsPerNamespace}}
+{{$deletePvcsPerNamespace := .deletePvcsPerNamespace}}
+
+steps:
+- name: Starting measurement for '{{$actionName}}'
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningStatefulSets
+      Params:
+        apiVersion: apps/v1
+        kind: StatefulSet
+    Params:
+      action: start
+      checkIfPodsAreUpdated: true
+      labelSelector: gkebackup = volume
+      operationTimeout: 300m
+
+- name: {{$actionName}} statefulsets with volumes
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: {{$statefulSetsPerNamespace}}
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+    - basename: sts
+      objectTemplatePath: statefulset-svc.yaml
+    - basename: sts
+      objectTemplatePath: statefulset-pd.yaml
+      templateFillMap:
+        Replicas: {{$statefulSetSize}}
+{{if $isDeletion}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 0
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+  {{range $ssIndex := Loop $deletePvcsPerNamespace}}
+    - basename: storage-pv-sts-{{$ssIndex}}
+      objectTemplatePath: pvc.yaml
+      listUnknownObjectOptions:
+        labelSelector:
+          matchLabels:
+            name: sts-{{$ssIndex}}
+  {{end}}
+{{end}}
+
+{{if $isDeletion}}
+- name: Waiting for PVC to be deleted
+  measurements:
+  - Identifier: WaitForPVCsToBeDeleted
+    Method: WaitForBoundPVCs
+    Params:
+      desiredPVCCount: 0
+      labelSelector: gkebackup = volume
+      timeout: 150m
+{{end}}
+
+{{if not $isDeletion}}
+# As long as all PVCs are deleted, all Pods must be gone already.
+# So no need to wait for pods in deletion case.
+- name: Waiting for '{{$actionName}}' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningStatefulSets
+    Params:
+      action: gather
+{{end}}
+
+# After all Pods up and running, do not need to measure as disruptive restore
+# will eventually delete those.
+- name: Stopping measurement for stateful workloads
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningStatefulSets
+    Params:
+      action: stop

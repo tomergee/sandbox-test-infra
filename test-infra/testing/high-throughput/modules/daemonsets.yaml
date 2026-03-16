@@ -1,0 +1,68 @@
+{{$daemonSetImage := DefaultParam .daemonSetImage "gke.gcr.io/pause:3.8"}}
+{{$daemonSetEnv := .daemonSetEnv}}
+{{$threshold := DefaultParam .throughputThreshold 0}}
+
+steps:
+- name: Starting measurement for daemonsets
+  measurements:
+  - Identifier: WaitForRunningDaemonSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      action: start
+      labelSelector: group = load
+      operationTimeout: 15m
+{{if .create}}
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: daemonsets
+      action: start
+      threshold: {{$threshold}}
+- name: Creating daemonsets
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: daemonset
+      objectTemplatePath: daemonset.yaml
+      templateFillMap:
+        Image: {{$daemonSetImage}}
+        Env: {{$daemonSetEnv}}
+- name: Waiting for 'create' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Identifier: WaitForRunningDaemonSets
+    Params:
+      action: gather
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: daemonsets
+      action: gather
+{{end}}
+{{if .delete}}
+- name: Deleting daemonsets
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: daemonset
+      objectTemplatePath: daemonset.yaml
+      templateFillMap:
+        Image: {{$daemonSetImage}}
+        Env: {{$daemonSetEnv}}
+- name: Waiting for 'delete' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Identifier: WaitForRunningDaemonSets
+    Params:
+      action: gather
+{{end}}

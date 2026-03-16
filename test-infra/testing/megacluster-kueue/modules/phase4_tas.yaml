@@ -1,0 +1,131 @@
+# ==============================================================================
+# ClusterLoader2 TAS (Topology Aware Scheduling) Test Module
+#
+# This module defines a sequence of steps to test Kueue's Topology Aware
+# Scheduling features. It involves setting up namespaces, topology objects,
+# specific ResourceFlavors, ClusterQueues, LocalQueues, and then creating
+# and deleting workloads.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Input Parameters & Calculated Variables
+# ------------------------------------------------------------------------------
+{{$LOCAL_RUN := .CL2_LOCAL_RUN}}               # Flag indicating if running locally (adjusts script paths)
+
+{{$Namespace := .Namespace}}                     # Base name for the namespace(s) created in the test.
+
+{{$SleepDuration := DefaultParam .CL2_SLEEP_DURATION_BETWEEN_PHASES "120s"}} # Default sleep duration between steps.
+
+# --- Priority Classes (Passed into this module) ---
+{{$priorityClassLow := .priorityClassLow}}
+
+
+{{$DefaultGkeTopology := DefaultParam .CL2_DefaultGkeTopology true}}
+{{$SkipGeneratingTopologyLabels := DefaultParam .CL2_SKIP_GENERATING_TOPOLOGY_LABELS false}}
+{{$CustomTopologies := DefaultParam .CL2_CustomTopologies 1}}
+{{$CustomTopologyLevels := DefaultParam .CL2_CustomTopologyLevels 3}}
+{{$CustomTopologyPrefix := "custom-topology"}}
+{{$CustomTopologyLevelChildrenRanges := DefaultParam .CL2_CustomTopologyLevelChildrenRanges "1:3,1:3"}}
+{{$CustomTopologyDryRunLabelling := DefaultParam .CL2_CustomTopologyDryRunLabelling true}}
+{{$KUEUE_CONFIGURATIONS_TAS_ENABLED := DefaultParam .CL2_KUEUE_CONFIGURATIONS_TAS_ENABLED true}}
+{{$TARGET_TOPOLOGY_LEVEL := DefaultParam .CL2_TARGET_TOPOLOGY_LEVEL 0}}
+{{$TARGET_TOPOLOGY_SLICE_LEVEL := DefaultParam .CL2_TARGET_TOPOLOGY_SLICE_LEVEL 1}}
+
+# --- Measurement Configuration ---
+{{$ThroughputThreshold := DefaultParam .ThroughputThreshold 5}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{$PodStartupLatencyThreshold := DefaultParam .PodStartupLatencyThreshold "10m"}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+
+# ------------------------------------------------------------------------------
+# Phase 4: Initialization and Setup
+# ------------------------------------------------------------------------------
+
+
+{{if $DefaultGkeTopology}}
+- module:
+    path: phase4/single_topology_e2e_test.yaml
+    params:
+      basename: "Default GKE Topology e2e test"
+      TopologyName: "gke-default-tas-topology"
+      priorityClassLow: {{$priorityClassLow}}
+      DefaultGkeTopology: true
+      Namespace: {{$Namespace}}
+      TargetTopologyLevel: "cloud.google.com/gce-topology-block"
+      TargetTopologyLevelIndex: 0
+      TargetTopologySliceLevel: "cloud.google.com/gce-topology-subblock"
+      TargetTopologySliceLevelIndex: 1
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+{{else}}
+{{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+{{if not $SkipGeneratingTopologyLabels}}
+{{range $i := Loop $CustomTopologies}}
+- name: "Phase 4; Init Topologies; Generate topology labels for topology {{$i}}"
+  measurements:
+    # Executes a diagnostic script.
+    - Identifier: GenerateTopologyLabels-{{$i}}
+      Method: Exec
+      Params:
+        timeout: 120m
+        command:
+          - "bash"
+          # Adjust script path based on execution environment
+          {{if $LOCAL_RUN}}
+          - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/phase4/generate_topology_labels.sh"
+          {{else}}
+          - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/phase4/generate_topology_labels.sh"
+          {{end}}
+          # Pass necessary arguments to the script
+          - "label"
+          - "{{$CustomTopologyPrefix}}-{{$i}}"
+          - "{{$CustomTopologyLevels}}"
+          - "{{$CustomTopologyLevelChildrenRanges}}"
+          - "worker-node-pool=true" # filter for nodes
+          - "10" # parallelization for node labelling
+          - "{{$CustomTopologyDryRunLabelling}}"
+
+- name: "Phase 4; Init Topologies; Sleep after creating topology {{$CustomTopologyPrefix}}-{{$i}}"
+  measurements:
+    # Pauses execution for the specified duration.
+    - Identifier: Sleep_AfterTopology{{$i}}_Creation
+      Method: Sleep
+      Params:
+        duration: {{$SleepDuration}}
+{{end}}
+{{end}}
+{{end}}
+
+{{range $i := Loop $CustomTopologies}}
+- module:
+    path: phase4/single_topology_e2e_test.yaml
+    params:
+      basename: "Topology {{$CustomTopologyPrefix}}-{{$i}} e2e test"
+      priorityClassLow: {{$priorityClassLow}}
+      DefaultGkeTopology: false
+      TopologyName: "{{$CustomTopologyPrefix}}-{{$i}}"
+      CustomTopologyLevels: {{$CustomTopologyLevels}}
+      CustomTopologyPrefix: "{{$CustomTopologyPrefix}}-{{$i}}"
+      Namespace: "{{$Namespace}}-{{$i}}"
+      TargetTopologyLevel: "{{$CustomTopologyPrefix}}-{{$i}}/level{{$TARGET_TOPOLOGY_LEVEL}}"
+      TargetTopologyLevelIndex: {{$TARGET_TOPOLOGY_LEVEL}}
+      TargetTopologySliceLevel: "{{$CustomTopologyPrefix}}-{{$i}}/level{{$TARGET_TOPOLOGY_SLICE_LEVEL}}"
+      TargetTopologySliceLevelIndex: {{$TARGET_TOPOLOGY_SLICE_LEVEL}}
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+
+- name: "Phase 4; Sleep after e2e testing of topology {{$CustomTopologyPrefix}}-{{$i}}"
+  measurements:
+    # Pauses execution for the specified duration.
+    - Identifier: Sleep_AfterTopology{{$i}}_E2e_Test
+      Method: Sleep
+      Params:
+        duration: {{$SleepDuration}}
+
+
+{{end}}
+{{end}}
+

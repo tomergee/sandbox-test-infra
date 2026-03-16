@@ -1,0 +1,25 @@
+# ==============================================================================
+# Kueue WorkloadPriorityClass Configuration Template
+#
+# This template defines a Kueue WorkloadPriorityClass resource. These resources
+# establish named priority levels that can be assigned to workloads (Jobs,
+# Deployments, etc.) via labels. Higher values indicate higher priority for
+# admission and preemption decisions within Kueue.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+# {{.Name}}  - The name for the WorkloadPriorityClass resource (passed during template execution).
+# {{.Value}} - The integer priority value (passed during template execution). Higher values mean higher priority.
+
+# ==============================================================================
+# WorkloadPriorityClass Resource Definition
+# ==============================================================================
+{{$CONFIG_API_VERSION := DefaultParam .CL2_CONFIG_API_VERSION "v1beta1"}} # v1beta2 is supported only in 0.15+
+
+apiVersion: kueue.x-k8s.io/{{$CONFIG_API_VERSION}}
+kind: WorkloadPriorityClass
+metadata:
+  name: {{.Name}}
+value: {{.Value}}

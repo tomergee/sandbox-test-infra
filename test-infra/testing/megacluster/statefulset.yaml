@@ -1,0 +1,125 @@
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}}
+{{$MemoryRequest := DefaultParam .MemoryRequest "20M"}}
+{{$podPayloadSize := DefaultParam .CL2_STATEFULSET_POD_PAYLOAD_SIZE 1024}}
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}}
+{{$NumNets := DefaultParam .CL2_MN_NUM_NET 0 }}
+{{$MultipleSvcs := DefaultParam .MultipleSvcs false}}
+{{$group := DefaultParam .group "load"}}
+
+{{$image := .image}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Name}}
+  labels:
+    {{if $MultipleSvcs}}
+    svc: "{{.SvcName}}-{{.Index}}"
+    {{else}}
+    svc: {{.SvcName}}
+    {{end}}
+    group: {{$group}}
+    startupLatencyGroup: load-statefulsets
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  # headless service name, assuming service.replicasPerNamespace=1
+  # needs to be set for the DNS label to be based on pod name rather than its IP address
+  # https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#stable-network-id
+  serviceName: headless-service-0
+  template:
+    metadata:
+      labels:
+        {{if $MultipleSvcs}}
+        svc: "{{.SvcName}}-{{.Index}}"
+        {{else}}
+        svc: {{.SvcName}}
+        {{end}}
+        name: {{.Name}}
+        group: {{$group}}
+        startupLatencyGroup: load-statefulsets
+{{ if gt $NumNets 0 }}
+      annotations:
+        networking.gke.io/default-interface: 'eth0'
+        networking.gke.io/interfaces: |
+          [
+            {
+              "interfaceName": "eth0",
+              "network": "default"
+            }
+{{- range $i := Loop $NumNets }}
+{{- $nicIdx := AddInt $i 1 }}
+            ,
+            {
+              "interfaceName": "eth{{$nicIdx}}",
+              "network": "mn-net{{$nicIdx}}"
+            }
+{{- end }}
+          ]
+{{- end }}
+    spec:
+      schedulerName: {{$SchedulerName}}
+      nodeSelector:
+        worker-node-pool: "true"
+      automountServiceAccountToken: false
+      containers:
+      - env:
+        - name: ENV_VAR
+          value: {{RandData $podPayloadSize}}
+        image: {{$image}}
+        imagePullPolicy: IfNotPresent
+        name: {{.Name}}
+        ports:
+        - containerPort: 1328
+          hostPort: 1328
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            memory: {{$MemoryRequest}}
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /pod-info
+          name: downward-api
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 900
+      volumes:
+      - emptyDir:
+          medium: Memory
+        name: dshm
+      - downwardAPI:
+          defaultMode: 420
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+            path: name
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.uid
+            path: uid
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels
+            path: labels
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.annotations
+            path: annotations
+        name: downward-api

@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: scale-deployment
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      group: scale-test
+  template:
+    metadata:
+      labels:
+        group: scale-test
+    spec:
+      containers:
+        - name: pause
+          image: k8s.gcr.io/pause:3.1
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: group
+                    operator: In
+                    values:
+                      - scale-test
+              topologyKey: "kubernetes.io/hostname"

@@ -1,0 +1,69 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fake-tpu-devices
+  labels:
+    app: fake-devices
+  namespace: {{.Namespace}}
+spec:
+  selector:
+    matchLabels:
+      app: fake-devices
+  template:
+    metadata:
+      labels:
+        app: fake-devices
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-nodepool
+                operator: In
+                values:
+                - default-pool
+                - default-pool-0
+                - default-pool-1
+                - default-pool-2
+                - default-pool-3
+                - default-pool-4
+                - heapster-pool
+      initContainers:
+      - name: fake-devices
+        image: gke.gcr.io/debian-base:bookworm-v1.0.0-gke.1
+        # devices cannot be created directly from the container so we
+        # need to create a systemd service to create the devices
+        command:
+        - /bin/sh
+        - -c
+        - |
+          cat <<EOF > /host/etc/systemd/system/fake-devices.service
+          [Unit]
+          Description=Fake Devices Creation Service
+
+          [Service]
+          ExecStart=/bin/bash -c 'echo "Creating devices"; mknod /dev/accel0 b 100 0; mknod /dev/accel1 b 100 1; mknod /dev/accel2 b 100 2; mknod /dev/accel3 b 100 3;'
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          nsenter -a -t1 -- systemctl daemon-reload
+          nsenter -a -t1 -- systemctl enable fake-devices.service
+          nsenter -a -t1 -- systemctl start fake-devices.service
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: host-systemd
+          mountPath: /host/etc/systemd/system
+      containers:
+      - image: gcr.io/google-containers/pause:3.2
+        name: pause
+      hostPID: true
+      volumes:
+      - name: host-systemd
+        hostPath:
+          path: /etc/systemd/system
+          type: Directory

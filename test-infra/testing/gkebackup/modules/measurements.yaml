@@ -1,0 +1,29 @@
+# Valid action: "start", "gather"
+{{$action := .action}}
+
+steps:
+- name: "{{$action}}ing measurements"
+  measurements:
+  - Identifier: APIResponsivenessPrometheus
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: {{$action}}
+      enableViolations: false
+      allowedSlowCalls: 0
+      customThresholds: {{YamlQuote "" 4}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: {{$action}}
+      pollFrequency: "5s"
+      hostPollTimeoutSeconds: 5
+      threshold: 0
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: {{$action}}
+      systemPodMetricsEnabled: true
+      clusterOOMsIgnoredProcesses: {{YamlQuote "" 4}}
+      clusterOOMsTrackerEnabled: true
+      restartCountThresholdOverrides: {{YamlQuote "" 4}}
+      enableRestartCountCheck: true

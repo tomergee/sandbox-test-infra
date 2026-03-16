@@ -1,0 +1,89 @@
+{{$cpuRequest := DefaultParam .cpuRequest "5m"}}
+{{$basename := DefaultParam .basename (printf "statefulset-%.0f" .size)}}
+{{$threshold := DefaultParam .throughputThreshold 0}}
+{{$image := .image}}
+
+steps:
+- name: Starting measurements for statefulsets
+  measurements:
+{{if .create}}
+  - Identifier: PodStartupLatencyStatefulSet
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: startupLatencyGroup = load-statefulsets
+      threshold: 10m
+{{end}}
+  - Identifier: WaitForRunningStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      action: start
+      labelSelector: group = load-statefulsets
+      operationTimeout: 1h
+{{if .create}}
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: {{$basename}}
+      action: start
+      threshold: {{$threshold}}
+- name: Creating statefulsets of size {{.size}}
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: {{$basename}}
+      objectTemplatePath: statefulset.yaml
+      templateFillMap:
+        Replicas: {{.size}}
+        CpuRequest: {{$cpuRequest}}
+        image: {{$image}}
+        SvcName: headless
+        group: load-statefulsets
+- name: Waiting for 'create' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Identifier: WaitForRunningStatefulSets
+    Params:
+      action: gather
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: {{$basename}}
+      action: gather
+- name: Measure statefulset pod startup latency
+  measurements:
+  - Identifier: PodStartupLatencyStatefulSet
+    Method: PodStartupLatency
+    Params:
+      action: gather
+{{end}}
+
+{{if .delete}}
+- name: Deleting statefulsets of size {{.size}}
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: {{$basename}}
+      objectTemplatePath: statefulset.yaml
+      templateFillMap:
+          image: {{$image}}
+          SvcName: headless
+          group: load-statefulsets
+- name: Waiting for 'delete' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningStatefulSets
+    Params:
+      action: gather
+{{end}}

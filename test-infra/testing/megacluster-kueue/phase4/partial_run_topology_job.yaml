@@ -1,0 +1,298 @@
+
+{{$CommonRunWorkloadsModule := "modules/common_run_workloads.yaml"}}
+
+
+{{$ScenarioNameString := .ScenarioNameString}}
+{{$ScenarioWorkloadReplicas := .ScenarioWorkloadReplicas}}
+{{$InObjectReplicas := DefaultParam .InObjectReplicas false}} # If true, replicas are defined *inside* the object template (e.g., Deployment.spec.replicas)
+                                             # If false, CL2 creates $Replicas individual objects per namespace.
+
+{{$ScenarioWorkloadSize := .ScenarioWorkloadSize}}
+
+{{$Phase := .Phase}}
+{{$Namespace := .Namespace}}
+
+{{$DefaultKueueQueueName := .DefaultKueueQueueName}}
+{{$TasKueueQueueName := .TasKueueQueueName}}
+{{$WorkloadCpuRequest := .WorkloadCpuRequest}}
+{{$WorkloadMemoryRequest := .WorkloadMemoryRequest}}
+{{$WorkloadPriorityClass := .WorkloadPriorityClass}}
+{{$WorkloadSleepDuration := .WorkloadSleepDuration}}
+{{$PodPayloadSize := .PodPayloadSize}}
+{{$BindPort := .BindPort}}     # Whether workloads bind host ports.
+
+{{$JobStepTimeout := DefaultParam .JobStepTimeout "10m"}}
+{{$SchedulingThroughputThreshold := .SchedulingThroughputThreshold}}
+{{$PodStartupLatencyThreshold := .PodStartupLatencyThreshold}}
+
+{{$TargetTopologyLevel := .TargetTopologyLevel}}
+{{$TargetTopologyLevelIndex := .TargetTopologyLevelIndex}}
+{{$TargetTopologySliceLevel := .TargetTopologySliceLevel}}
+{{$TargetTopologySliceLevelIndex := .TargetTopologySliceLevelIndex}}
+{{$TasEnabled := DefaultParam .TasEnabled true}}
+
+
+{{$WorkloadObject := DefaultParam .WorkloadObject "job"}}
+
+{{$SkipNonTasWorkloadsOnTasCq := DefaultParam .SkipNonTasWorkloadsOnTasCq false}}
+{{$SkipRequiredTopologyWorkload := DefaultParam .SkipRequiredTopologyWorkload false}}
+{{$EnableRequiredSliceTopologyWorkload := DefaultParam .EnableRequiredSliceTopologyWorkload false}}
+{{$ApiVersion := DefaultParam .ApiVersion "batch/v1"}} # API version for the primary resource (e.g., "batch/v1", "apps/v1")
+
+# PProf configurations
+{{$ReportPprof := DefaultParam .CL2_ENABLE_TAS_KUEUE_PPROF false}}
+{{$ReportKueueControllerResources := DefaultParam .CL2_ENABLE_TAS_KUEUE_CONTROLLER_RESOURCES false}}
+
+
+steps:
+# --- Step 1: non-Kueue Workloads ---
+- name: "Phase {{$Phase}} - {{$ScenarioNameString}} - Step 1: Run default Workloads without kueue ({{$ScenarioWorkloadReplicas}} Jobs)"
+  module:
+    path: {{$CommonRunWorkloadsModule}}
+    params:
+      # --- Basic Info ---
+      StepName: "Non Kueue Workloads"
+      StepId: NonKueueWorkloads
+      Group: non-kueue-workload-tas
+      WorkloadName: non-kueue-job-tas
+      WorkloadType: non-kueue
+      TemplatePath: common/{{$WorkloadObject}}.yaml
+      Phase: "Phase {{$Phase}} - {{$ScenarioNameString}}"
+      Step: "Step 1"
+      Namespace: {{$Namespace}}
+      # --- Sizing & Resources ---
+      Size: {{$ScenarioWorkloadSize}}
+      Replicas: {{$ScenarioWorkloadReplicas}}
+      CpuRequest: {{$WorkloadCpuRequest}}
+      MemoryRequest: "{{$WorkloadMemoryRequest}}Mi"
+      PodPayloadSize: {{$PodPayloadSize}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: ""
+      QueueName: "" # Submit without Kueue
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$WorkloadSleepDuration}}
+      BindPort: {{$BindPort}}
+      delete: true # Delete workloads after running
+      DesiredRunningPods: {{MultiplyInt $ScenarioWorkloadReplicas $ScenarioWorkloadSize}}
+      WaitForControlledPodsRunning: false # Rely on DesiredRunningPods instead
+      Timeout: "{{$JobStepTimeout}}"
+      ThroughputThreshold: {{$SchedulingThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase{{$Phase}}"
+      ReportWorkloadsSize: true
+      InObjectReplicas: {{$InObjectReplicas}}
+      ApiVersion: {{$ApiVersion}}
+      ReportKueueControllerResources: {{$ReportKueueControllerResources}}
+      ReportPprof: {{$ReportPprof}}
+
+# --- Step 2: Non-TAS Workloads ---
+- name: "Phase {{$Phase}} - {{$ScenarioNameString}} - Step 2: Run default Workloads on default clusterqueue ({{$ScenarioWorkloadReplicas}} Jobs)"
+  module:
+    path: {{$CommonRunWorkloadsModule}}
+    params:
+      # --- Basic Info ---
+      StepName: "Default Workloads"
+      StepId: DefaultWorkloads
+      Group: default-workload-tas
+      WorkloadName: default-job-tas
+      WorkloadType: default
+      TemplatePath: common/{{$WorkloadObject}}.yaml
+      Phase: "Phase {{$Phase}} - {{$ScenarioNameString}}"
+      Step: "Step 2"
+      Namespace: {{$Namespace}}
+      # --- Sizing & Resources ---
+      Size: {{$ScenarioWorkloadSize}}
+      Replicas: {{$ScenarioWorkloadReplicas}}
+      CpuRequest: {{$WorkloadCpuRequest}}
+      MemoryRequest: "{{$WorkloadMemoryRequest}}Mi"
+      PodPayloadSize: {{$PodPayloadSize}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$WorkloadPriorityClass}}
+      QueueName: {{$DefaultKueueQueueName}}
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$WorkloadSleepDuration}}
+      BindPort: {{$BindPort}}
+      delete: true # Delete workloads after running
+      DesiredRunningPods: {{MultiplyInt $ScenarioWorkloadReplicas $ScenarioWorkloadSize}}
+      WaitForControlledPodsRunning: false # Rely on DesiredRunningPods instead
+      Timeout: "{{$JobStepTimeout}}"
+      ThroughputThreshold: {{$SchedulingThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase{{$Phase}}"
+      ReportWorkloadsSize: true
+      InObjectReplicas: {{$InObjectReplicas}}
+      ApiVersion: {{$ApiVersion}}
+      ReportKueueControllerResources: {{$ReportKueueControllerResources}}
+      ReportPprof: {{$ReportPprof}}
+
+{{if $TasEnabled}}
+
+{{if not $SkipNonTasWorkloadsOnTasCq}}
+- name: "Phase {{$Phase}} - {{$ScenarioNameString}} - Step 3: Run non-TAS Workloads ({{$ScenarioWorkloadReplicas}} Jobs)"
+  module:
+    path: {{$CommonRunWorkloadsModule}}
+    params:
+      # --- Basic Info ---
+      StepName: "Non-TAS Workloads"
+      StepId: NonTASWorkloads
+      Group: non-tas-workload-tas
+      WorkloadName: non-tas-job-tas
+      WorkloadType: tas
+      TemplatePath: common/{{$WorkloadObject}}.yaml
+      Phase: "Phase {{$Phase}} - {{$ScenarioNameString}}"
+      Step: "Step 3"
+      Namespace: {{$Namespace}}
+      # --- Sizing & Resources ---
+      Size: {{$ScenarioWorkloadSize}}
+      Replicas: {{$ScenarioWorkloadReplicas}}
+      CpuRequest: {{$WorkloadCpuRequest}}
+      MemoryRequest: "{{$WorkloadMemoryRequest}}Mi"
+      PodPayloadSize: {{$PodPayloadSize}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$WorkloadPriorityClass}}
+      QueueName: {{$TasKueueQueueName}}
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$WorkloadSleepDuration}}
+      BindPort: {{$BindPort}}
+      delete: true # Delete workloads after running
+      DesiredRunningPods: {{MultiplyInt $ScenarioWorkloadReplicas $ScenarioWorkloadSize}}
+      WaitForControlledPodsRunning: false # Rely on DesiredRunningPods instead
+      Timeout: "{{$JobStepTimeout}}"
+      ThroughputThreshold: {{$SchedulingThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase{{$Phase}}"
+      ReportWorkloadsSize: true
+      InObjectReplicas: {{$InObjectReplicas}}
+      ApiVersion: {{$ApiVersion}}
+      ReportKueueControllerResources: {{$ReportKueueControllerResources}}
+      ReportPprof: {{$ReportPprof}}
+{{end}}
+
+# --- Step 4: Preferred-Lvl{{$TargetTopologyLevelIndex}} TAS Workloads ---
+- name: "Phase {{$Phase}} - {{$ScenarioNameString}} - Step 4: Run preferred-lvl{{$TargetTopologyLevelIndex}}-TAS Workloads ({{$ScenarioWorkloadReplicas}} Jobs)"
+  module:
+    path: {{$CommonRunWorkloadsModule}}
+    params:
+      # --- Basic Info ---
+      StepName: "preferred-lvl{{$TargetTopologyLevelIndex}}-TAS Workloads"
+      StepId: PreferredLvl{{$TargetTopologyLevelIndex}}TASWorkloads
+      Group: preferred-workload-tas
+      WorkloadName: pref-lvl{{$TargetTopologyLevelIndex}}-job-tas
+      WorkloadType: tas
+      TemplatePath: common/{{$WorkloadObject}}.yaml
+      Phase: "Phase {{$Phase}} - {{$ScenarioNameString}}"
+      Step: "Step 4"
+      Namespace: {{$Namespace}}
+      # --- Sizing & Resources ---
+      Size: {{$ScenarioWorkloadSize}}
+      Replicas: {{$ScenarioWorkloadReplicas}}
+      CpuRequest: {{$WorkloadCpuRequest}}
+      MemoryRequest: "{{$WorkloadMemoryRequest}}Mi"
+      PodPayloadSize: {{$PodPayloadSize}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$WorkloadPriorityClass}}
+      QueueName: {{$TasKueueQueueName}}
+      PreferredTopology: {{$TargetTopologyLevel}}
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$WorkloadSleepDuration}}
+      BindPort: {{$BindPort}}
+      delete: true
+      DesiredRunningPods: {{MultiplyInt $ScenarioWorkloadReplicas $ScenarioWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "{{$JobStepTimeout}}"
+      ThroughputThreshold: {{$SchedulingThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase{{$Phase}}"
+      ReportWorkloadsSize: true
+      InObjectReplicas: {{$InObjectReplicas}}
+      ApiVersion: {{$ApiVersion}}
+      ReportKueueControllerResources: {{$ReportKueueControllerResources}}
+      ReportPprof: {{$ReportPprof}}
+
+# --- Step 5: Required-Lvl{{$TargetTopologyLevelIndex}} TAS Workloads ---
+{{if not $SkipRequiredTopologyWorkload}}
+- name: "Phase {{$Phase}} - {{$ScenarioNameString}} - Step 5: Run required-lvl{{$TargetTopologyLevelIndex}}-TAS Workloads ({{$ScenarioWorkloadReplicas}} Jobs)"
+  module:
+    path: {{$CommonRunWorkloadsModule}}
+    params:
+      # --- Basic Info ---
+      StepName: "required-lvl{{$TargetTopologyLevelIndex}}-TAS Workloads"
+      StepId: RequiredLvl{{$TargetTopologyLevelIndex}}TASWorkloads
+      Group: required-workload-tas
+      WorkloadName: req-lvl{{$TargetTopologyLevelIndex}}-workload-tas
+      WorkloadType: tas
+      TemplatePath: common/{{$WorkloadObject}}.yaml
+      Phase: "Phase {{$Phase}} - {{$ScenarioNameString}}"
+      Step: "Step 5"
+      Namespace: {{$Namespace}}
+      # --- Sizing & Resources ---
+      Size: {{$ScenarioWorkloadSize}}
+      Replicas: {{$ScenarioWorkloadReplicas}}
+      CpuRequest: {{$WorkloadCpuRequest}}
+      MemoryRequest: "{{$WorkloadMemoryRequest}}Mi"
+      PodPayloadSize: {{$PodPayloadSize}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$WorkloadPriorityClass}}
+      QueueName: {{$TasKueueQueueName}}
+      RequiredTopology: {{$TargetTopologyLevel}}
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$WorkloadSleepDuration}}
+      BindPort: {{$BindPort}}
+      delete: true
+      DesiredRunningPods: {{MultiplyInt $ScenarioWorkloadReplicas $ScenarioWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "{{$JobStepTimeout}}"
+      ThroughputThreshold: {{$SchedulingThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase{{$Phase}}"
+      ReportWorkloadsSize: true
+      InObjectReplicas: {{$InObjectReplicas}}
+      ApiVersion: {{$ApiVersion}}
+      ReportKueueControllerResources: {{$ReportKueueControllerResources}}
+      ReportPprof: {{$ReportPprof}}
+{{end}}
+
+# --- Step 6: Preferred-Lvl{{$TargetTopologyLevelIndex}} Required-Lvl{{$TargetTopologySliceLevelIndex}} TAS Workloads - only for jobset or multi-jobs (so it can combined as a multi job)---
+{{if (and $EnableRequiredSliceTopologyWorkload (or (and (eq $WorkloadObject "job") (gt $ScenarioWorkloadReplicas 1.0)) (eq $WorkloadObject "jobset")))}}
+- name: "Phase {{$Phase}} - {{$ScenarioNameString}} - Step 6: Run preferred-lvl{{$TargetTopologyLevelIndex}}-required-lvl{{$TargetTopologySliceLevelIndex}}-TAS Workloads"
+  module:
+    path: {{$CommonRunWorkloadsModule}}
+    params:
+      # --- Basic Info ---
+      StepName: "preferred-lvl{{$TargetTopologyLevelIndex}}-required-lvl{{$TargetTopologySliceLevelIndex}}-TAS Workloads"
+      StepId: PreferredLvl{{$TargetTopologyLevelIndex}}RequiredLvl{{$TargetTopologySliceLevelIndex}}TASWorkloads
+      Group: preferred-required-workload-tas
+      WorkloadName: pr-l{{$TargetTopologyLevelIndex}}-rq-l{{$TargetTopologySliceLevelIndex}}-w-tas
+      WorkloadType: tas
+      TemplatePath: common/{{$WorkloadObject}}.yaml
+      Phase: "Phase {{$Phase}} - {{$ScenarioNameString}}"
+      Step: "Step 6"
+      Namespace: {{$Namespace}}
+      # --- Sizing & Resources ---
+      Size: {{$ScenarioWorkloadSize}}
+      Replicas: {{$ScenarioWorkloadReplicas}}
+      CpuRequest: {{$WorkloadCpuRequest}}
+      MemoryRequest: "{{$WorkloadMemoryRequest}}Mi"
+      PodPayloadSize: {{$PodPayloadSize}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$WorkloadPriorityClass}}
+      QueueName: {{$TasKueueQueueName}}
+      PreferredTopology: {{$TargetTopologyLevel}}
+      RequiredSliceTopology: {{$TargetTopologySliceLevel}}
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$WorkloadSleepDuration}}
+      BindPort: {{$BindPort}}
+      delete: true
+      DesiredRunningPods: {{MultiplyInt $ScenarioWorkloadReplicas $ScenarioWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "{{$JobStepTimeout}}"
+      ThroughputThreshold: {{$SchedulingThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase{{$Phase}}"
+      ReportWorkloadsSize: true
+      InObjectReplicas: true # in pod slice it's always assume two level topology, hence the replicas should always be inside
+      ApiVersion: {{$ApiVersion}}
+      ReportKueueControllerResources: {{$ReportKueueControllerResources}}
+      ReportPprof: {{$ReportPprof}}
+{{end}}
+{{end}}

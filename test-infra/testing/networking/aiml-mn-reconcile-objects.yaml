@@ -1,0 +1,57 @@
+## Input params
+{{$actionName := printf "%s objects" .actionName}}
+
+# Derivative variables
+{{$operationTimeout := .operationTimeout}}
+{{$replicasA := .replicasA}}
+{{$replicasB := .replicasB}}
+{{$size := .size}}
+
+## CL2 params
+{{$CHECK_IF_PODS_ARE_UPDATED := DefaultParam .CL2_CHECK_IF_PODS_ARE_UPDATED true}}
+
+steps:
+- name: Starting measurement for AI ML '{{$actionName}}'
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningAiMlStatefulSets
+      Params:
+        apiVersion: apps/v1
+        kind: StatefulSet
+    Params:
+      action: start
+      checkIfPodsAreUpdated: {{$CHECK_IF_PODS_ARE_UPDATED}}
+      labelSelector: group = aiml
+      operationTimeout: {{$operationTimeout}}
+
+- name: AI ML {{$actionName}}
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$replicasA}}
+    tuningSet: default
+    objectBundle:
+    - basename: mn-st-a
+      objectTemplatePath: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-statefulset.yaml
+      templateFillMap:
+        Replicas: {{$size}}
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$replicasB}}
+    tuningSet: default
+    objectBundle:
+    - basename: mn-st-b
+      objectTemplatePath: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-statefulset.yaml
+      templateFillMap:
+        Replicas: {{$size}}
+
+- name: Waiting for AI ML '{{$actionName}}' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningAiMlStatefulSets
+    Params:
+      action: gather

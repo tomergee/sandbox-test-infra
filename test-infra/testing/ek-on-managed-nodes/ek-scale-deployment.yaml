@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: ek-scale-deployment
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      group: ek-scale-test
+  template:
+    metadata:
+      labels:
+        group: ek-scale-test
+    spec:
+      nodeSelector:
+        cloud.google.com/compute-class: autopilot
+      containers:
+        - name: pause
+          image: k8s.gcr.io/pause:3.1
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: group
+                    operator: In
+                    values:
+                      - ek-scale-test
+              topologyKey: "kubernetes.io/hostname"

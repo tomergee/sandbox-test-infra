@@ -1,0 +1,104 @@
+# ==============================================================================
+# Kubernetes Job Configuration Template
+#
+# This template defines a Kubernetes Job resource, suitable for running tasks
+# that run to completion. It includes integration with Kueue via labels and
+# uses indexed completion for managing parallel tasks.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}} # Default CPU request per pod replica created by the Job.
+{{$MemoryRequest := DefaultParam .MemoryRequest ""}} # Default Memory is no memory
+{{$Size := DefaultParam .Size 10}}             # Number of parallel pods/completions for the Job. If RequiredSliceTopology is enabled, then the parallelism/completion is size*replicas
+{{$BindPort := DefaultParam .BindPort false}}  # If true, bind a specific host port to the container port (less common for Jobs).
+{{$PriorityClass := .PriorityClass}}           # The Kubernetes PriorityClass name for the Job's pods. Used by Kueue.
+{{$QueueName := .QueueName}}                   # The target Kueue LocalQueue name for this Job.
+{{$Group := .Group}}                           # Label value for grouping related resources (e.g., for measurements in ClusterLoader2).
+{{$WorkloadType := .WorkloadType}}             # Label value indicating the type of workload (e.g., "batch-processing").
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}} # Specifies the Kubernetes scheduler to use.
+{{$PreferredTopology := DefaultParam .PreferredTopology ""}} # Preference for pods in this set to be scheduled within the specified topology domain
+{{$RequiredTopology := DefaultParam .RequiredTopology ""}} # Requirement for pods in this set to be scheduled within the specified topology domain
+{{$RequiredSliceTopology := DefaultParam .RequiredSliceTopology ""}} # Requirement for podset group to be scheduled within the specified topology domain.
+{{$PodPayloadSize := DefaultParam .PodPayloadSize "1"}} # Extra payload size in the form of env variable to increase object size
+{{$Replicas := DefaultParam .Replicas 1}}      # Parameter to use with pod slicing, total size of job is Size*Replicas, with each podSlice having Size. only used if RequiredSliceTopology is set
+
+# ==============================================================================
+# Job Resource Definition
+# ==============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.Name}}
+  labels:
+    {{if $QueueName}}
+    kueue.x-k8s.io/queue-name: {{$QueueName}}
+    kueue.x-k8s.io/priority-class: {{$PriorityClass}}
+    {{end}}
+    group: {{$Group}}
+    type: {{$WorkloadType}}
+spec:
+  {{if $RequiredSliceTopology}}
+  parallelism: {{MultiplyInt $Size $Replicas}}
+  completions: {{MultiplyInt $Size $Replicas}}
+  {{else}}
+  parallelism: {{$Size}}
+  completions: {{$Size}}
+  {{end}}
+  {{if $QueueName}}
+  suspend: true
+  {{else}}
+  suspend: false
+  {{end}}
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        type: {{$WorkloadType}}
+        group: {{$Group}}
+      annotations:
+        # Optional: Expresses a preference for pods in this set to be scheduled
+        # within the specified topology domain (e.g., "topology.kubernetes.io/zone").
+        # Kueue will try to satisfy this but may schedule across domains if necessary.
+        {{if $PreferredTopology}}
+        kueue.x-k8s.io/podset-preferred-topology: {{$PreferredTopology}}
+        {{end}}
+        # Optional: Expresses a requirement for pods in this set to be scheduled
+        # within the specified topology domain (e.g., "kubernetes.io/hostname").
+        # Kueue will fail admission if this cannot be satisfied.
+        {{if $RequiredTopology}}
+        kueue.x-k8s.io/podset-required-topology: {{$RequiredTopology}}
+        {{end}}
+        {{if $RequiredSliceTopology}}
+        kueue.x-k8s.io/podset-slice-required-topology: {{$RequiredSliceTopology}}
+        kueue.x-k8s.io/podset-slice-size: "{{$Size}}"
+        {{end}}
+    spec:
+      automountServiceAccountToken: false
+      schedulerName: {{$SchedulerName}}
+      restartPolicy: OnFailure
+      nodeSelector:
+        worker-node-pool: "true"
+      tolerations:
+      - key: "workload"
+        operator: "Equal"
+        value: "kueue-workload"
+        effect: "NoExecute"
+      containers:
+      - name: "{{$WorkloadType}}-job"
+        env:
+        - name: ENV_VAR
+          value: "{{RandData $PodPayloadSize}}"
+        image: us-docker.pkg.dev/gke-scalability-images/gcr.io/pause:3.0
+{{if $BindPort}}
+        ports:
+        - containerPort: 1328
+          hostPort: 1328
+{{end}}
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            {{if $MemoryRequest}}
+            memory: {{$MemoryRequest}}
+            {{end}}

@@ -1,0 +1,36 @@
+{{$action := .action}}
+
+steps:
+- name: "{{$action}}ing kspan shadower metric"
+  measurements:
+  - Identifier: KspanShadowerAvailability
+    Method: GenericPrometheusQuery
+    Params:
+      action: {{$action}}
+      metricName: Kspan Shadower 
+      metricVersion: v1
+      unit: active
+      enableViolations: true
+      queries:
+      - name: IsShadowingAtEnd
+        query: min(kspan_proxy_shadow_status{job="kspan-proxy", status="shadowing"})
+        requireSamples: true
+        threshold: 1
+        lowerBound: true
+
+- name: "{{$action}}ing kspan shadow metric"
+  measurements:
+  - Identifier: KspanShadowAvailability
+    Method: GenericPrometheusQuery
+    Params:
+      action: {{$action}}
+      metricName: Kspan Shadow Container
+      metricVersion: v1
+      unit: active
+      enableViolations: true
+      queries:
+      - name: IsHealthyAtEnd
+        query: min(kspan_proxy_shadow_status{job="kspan-proxy-shadow", status="shadow_running"})
+        requireSamples: true 
+        threshold: 1
+        lowerBound: true

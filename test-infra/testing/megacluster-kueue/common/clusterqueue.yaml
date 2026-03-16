@@ -1,0 +1,63 @@
+# ==============================================================================
+# Kueue ClusterQueue Configuration Template
+#
+# This template defines a Kueue ClusterQueue resource, which manages resource
+# quotas and scheduling behaviors across namespaces.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$Namespace := .Namespace}}                 # The specific namespace this ClusterQueue will select.
+{{$NominalQuota := .NominalQuota}}           # The base amount of CPU quota allocated to this ClusterQueue.
+{{$MemoryNominalQuota := .MemoryNominalQuota}} # The base amount of Memory quota allocated to this ClusterQueue.
+{{$FairSharingWeight := DefaultParam .FairSharingWeight 0}} # Weight for fair sharing calculations among ClusterQueues in the same cohort (0 disables fair sharing weight consideration).
+{{$Preemption := DefaultParam .Preemption false}} # If true, enables preemption settings for this ClusterQueue.
+{{$Cohort := DefaultParam .Cohort ""}}         # Optional: The cohort this ClusterQueue belongs to, enabling borrowing/lending and fair sharing.
+{{$CpuResourceFlavor := DefaultParam .CpuResourceFlavor "default-0"}} # The name of the ResourceFlavor to use for CPU quota.
+{{$CONFIG_API_VERSION := DefaultParam .CL2_CONFIG_API_VERSION "v1beta1"}} # v1beta2 is supported only in 0.15+
+
+# ==============================================================================
+# ClusterQueue Resource Definition
+# ==============================================================================
+apiVersion: kueue.x-k8s.io/{{$CONFIG_API_VERSION}}
+kind: ClusterQueue
+metadata:
+  name: {{.Name}}
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{$Namespace}}
+{{if $Cohort}}
+  cohort: {{$Cohort}}
+{{end}}
+
+  resourceGroups:
+{{if $MemoryNominalQuota}}
+    - coveredResources: ["cpu","memory"]
+{{else}}
+    - coveredResources: ["cpu"]
+{{end}}
+      flavors:
+        - name: {{$CpuResourceFlavor}}
+          resources:
+            - name: "cpu"
+              nominalQuota: "{{$NominalQuota}}"
+{{if $MemoryNominalQuota}}
+            - name: "memory"
+              nominalQuota: "{{$MemoryNominalQuota}}"
+{{end}}
+
+  # Optional: Configures fair sharing behavior within a cohort.
+{{if $FairSharingWeight}}
+  fairSharing:
+    weight: {{$FairSharingWeight}}
+{{end}}
+  # Optional: Configures preemption behavior.
+{{if $Preemption}}
+  preemption:
+    withinClusterQueue: LowerPriority
+    reclaimWithinCohort: Any
+    borrowWithinCohort:
+      policy: LowerPriority
+{{end}}

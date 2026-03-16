@@ -1,0 +1,482 @@
+# Test consts
+{{$LOAD_TEST_THROUGHPUT := DefaultParam .LOAD_TEST_THROUGHPUT 50}}
+{{$RESTART_COUNT_THRESHOLD_OVERRIDES:= DefaultParam .RESTART_COUNT_THRESHOLD_OVERRIDES ""}}
+
+# Spec consts
+# taken from go/spotify-scalability-spec
+{{$XSMALL_SIZE := 3}}
+{{$SMALL_SIZE := 10}}
+{{$MEDIUM_SIZE := 20}}
+{{$LARGE_SIZE := 100}}
+{{$XLARGE_SIZE := 500}}
+{{$HUGE_SIZE := 1000}}
+
+{{$XSMALL_DEPLOYMENTS_PER_NAMESPACE := 200}}
+{{$XSMALL_SERVICES_PER_NAMESPACE := MultiplyInt $XSMALL_DEPLOYMENTS_PER_NAMESPACE 3}}
+{{$SMALL_DEPLOYMENTS_PER_NAMESPACE := 50}}
+{{$MEDIUM_DEPLOYMENTS_PER_NAMESPACE := 10}}
+{{$LARGE_DEPLOYMENTS_PER_NAMESPACE := 7}}
+{{$XLARGE_DEPLOYMENTS_PER_NAMESPACE := 2}}
+
+{{$NAMESPACES_BASE := 6}}
+
+# Variables
+# Scale factor for the test.
+#  * 1 for current Spotify scale on GKE
+#  * 5-10 for expected scale
+{{$scale_factor := DefaultParam .SCALE_FACTOR 10}}
+# Normal namespaces contains deployemnts of various size (see $*_DEPLOYMENTS_PER_NAMESPACE)
+# Distribution of those deployments is the same in all "normal" namespaces.
+{{$namespaces_normal := MultiplyInt $scale_factor $NAMESPACES_BASE}}
+# Huge namespaces contains only deployments of size $HUGE_SIZE
+{{$namespaces_huge := $scale_factor}}
+{{$namespaces_total := AddInt $namespaces_normal $namespaces_huge}}
+
+{{$totalPods := MultiplyInt $scale_factor 19000}}
+{{$saturationTime := DivideInt $totalPods $LOAD_TEST_THROUGHPUT}}
+
+{{$scaleUp := 1.5}}
+{{$scaleDown := 0.5}}
+
+name: spotify
+namespace:
+  number: {{$namespaces_total}}
+tuningSets:
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+- name: RandomizedSaturationTimeLimited
+  RandomizedTimeLimitedLoad:
+    timeLimit: {{$saturationTime}}s
+- name: RandomizedScalingTimeLimited
+  RandomizedTimeLimitedLoad:
+    # The expected number of created/deleted pods is totalPods/4 when scaling,
+    # as each RS changes its size from X to a uniform random value in [X/2, 3X/2].
+    # To match X pods/s requirement, we need to divide saturationTime by 4.
+    timeLimit: {{DivideInt $saturationTime 4}}s
+steps:
+
+- name: Starting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheus
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: start
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = spotify
+      threshold: 1h
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt .Nodes 100)}}
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt .Nodes 100)}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      systemPodMetricsEnabled: true
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: true
+
+- name: Starting measurement for waiting for pods
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = spotify
+      operationTimeout: 15m
+
+- name: Creating services
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$XSMALL_SERVICES_PER_NAMESPACE}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: xsmall
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        DeploymentsNum: {{$XSMALL_DEPLOYMENTS_PER_NAMESPACE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$SMALL_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: small
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        DeploymentsNum: {{$SMALL_DEPLOYMENTS_PER_NAMESPACE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$MEDIUM_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: medium
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        DeploymentsNum: {{$MEDIUM_DEPLOYMENTS_PER_NAMESPACE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$LARGE_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: large
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        DeploymentsNum: {{$LARGE_DEPLOYMENTS_PER_NAMESPACE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{DivideInt $XLARGE_DEPLOYMENTS_PER_NAMESPACE 2}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: xlarge
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        DeploymentsNum: {{$XLARGE_DEPLOYMENTS_PER_NAMESPACE}}
+  # NOTE(janluk): Kubernetes doesn't support services with more than 250 endpoints
+  - namespaceRange:
+      min: {{AddInt $namespaces_normal 1}}
+      max: {{$namespaces_total}}
+    replicasPerNamespace: 3
+    tuningSet: Sequence
+    objectBundle:
+    - basename: huge
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        DeploymentsNum: {{$HUGE_DEPLOYMENTS}}
+
+- name: Creating deployments, secrets, configmaps
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$XSMALL_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: xsmall
+      objectTemplatePath: secret.yaml
+    # for now create more configmaps, but not utilize them
+    - basename: xsmall
+      objectTemplatePath: configmap.yaml
+    - basename: xsmall
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        MountConfigMap: true
+        ReplicasMin: {{$XSMALL_SIZE}}
+        ReplicasMax: {{$XSMALL_SIZE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$SMALL_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: small
+      objectTemplatePath: secret.yaml
+    - basename: small
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{$SMALL_SIZE}}
+        ReplicasMax: {{$SMALL_SIZE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$MEDIUM_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: medium
+      objectTemplatePath: secret.yaml
+    - basename: medium
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{$MEDIUM_SIZE}}
+        ReplicasMax: {{$MEDIUM_SIZE}}
+    - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$LARGE_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: large
+      objectTemplatePath: secret.yaml
+    - basename: large
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{$LARGE_SIZE}}
+        ReplicasMax: {{$LARGE_SIZE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$XLARGE_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: xlarge
+      objectTemplatePath: secret.yaml
+    - basename: xlarge
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{$XLARGE_SIZE}}
+        ReplicasMax: {{$XLARGE_SIZE}}
+  - namespaceRange:
+      min: {{AddInt $namespaces_normal 1}}
+      max: {{$namespaces_total}}
+    replicasPerNamespace: {{$HUGE_DEPLOYMENTS}}
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: huge
+      objectTemplatePath: secret.yaml
+    - basename: huge
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{$HUGE_SIZE}}
+        ReplicasMax: {{$HUGE_SIZE}}
+
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Scaling deployments
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$XSMALL_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedScalingTimeLimited
+    objectBundle:
+    - basename: xsmall
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{MultiplyInt $scaleDown $XSMALL_SIZE}}
+        ReplicasMax: {{MultiplyInt $scaleUp $XSMALL_SIZE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$SMALL_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedScalingTimeLimited
+    objectBundle:
+    - basename: small
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{MultiplyInt $scaleDown $SMALL_SIZE}}
+        ReplicasMax: {{MultiplyInt $scaleUp $SMALL_SIZE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$MEDIUM_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedScalingTimeLimited
+    objectBundle:
+    - basename: medium
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{MultiplyInt $scaleDown $MEDIUM_SIZE}}
+        ReplicasMax: {{MultiplyInt $scaleUp $MEDIUM_SIZE}}
+    - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$LARGE_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedScalingTimeLimited
+    objectBundle:
+    - basename: large
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{MultiplyInt $scaleDown $LARGE_SIZE}}
+        ReplicasMax: {{MultiplyInt $scaleUp $LARGE_SIZE}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: {{$XLARGE_DEPLOYMENTS_PER_NAMESPACE}}
+    tuningSet: RandomizedScalingTimeLimited
+    objectBundle:
+    - basename: xlarge
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{MultiplyInt $scaleDown $XLARGE_SIZE}}
+        ReplicasMax: {{MultiplyInt $scaleUp $XLARGE_SIZE}}
+  - namespaceRange:
+      min: {{AddInt $namespaces_normal 1}}
+      max: {{$namespaces_total}}
+    replicasPerNamespace: 1
+    tuningSet: RandomizedScalingTimeLimited
+    objectBundle:
+    - basename: huge
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        ReplicasMin: {{MultiplyInt $scaleDown $HUGE_SIZE}}
+        ReplicasMax: {{MultiplyInt $scaleUp $HUGE_SIZE}}
+
+- name: Waiting for pods to be scaled
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Deleting deployments, secrets, configmaps
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: xsmall
+      objectTemplatePath: secret.yaml
+    - basename: xsmall
+      objectTemplatePath: deployment.yaml
+    # for now create more configmaps, but not utilize them
+    - basename: xsmall
+      objectTemplatePath: configmap.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: small
+      objectTemplatePath: secret.yaml
+    - basename: small
+      objectTemplatePath: deployment.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: medium
+      objectTemplatePath: secret.yaml
+    - basename: medium
+      objectTemplatePath: deployment.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: large
+      objectTemplatePath: secret.yaml
+    - basename: large
+      objectTemplatePath: deployment.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: xlarge
+      objectTemplatePath: secret.yaml
+    - basename: xlarge
+      objectTemplatePath: deployment.yaml
+  - namespaceRange:
+      min: {{AddInt $namespaces_normal 1}}
+      max: {{$namespaces_total}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedSaturationTimeLimited
+    objectBundle:
+    - basename: huge
+      objectTemplatePath: secret.yaml
+    - basename: huge
+      objectTemplatePath: deployment.yaml
+
+- name: Waiting for pods to be deleted
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Deleting services
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: xsmall
+      objectTemplatePath: service.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: small
+      objectTemplatePath: service.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: medium
+      objectTemplatePath: service.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: large
+      objectTemplatePath: service.yaml
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces_normal}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: xlarge
+      objectTemplatePath: service.yaml
+  # NOTE(janluk): Kubernetes doesn't support services with more than 250 endpoints
+  - namespaceRange:
+      min: {{AddInt $namespaces_normal 1}}
+      max: {{$namespaces_total}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: huge
+      objectTemplatePath: service.yaml
+
+- name: Collecting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheus
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: gather
+      enableViolations: true
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: gather
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: gather
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      systemPodMetricsEnabled: true
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: true

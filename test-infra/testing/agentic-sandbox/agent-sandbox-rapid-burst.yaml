@@ -1,0 +1,134 @@
+{{$namespaces := DefaultParam .CL2_NAMESPACES 1}}
+{{$qps := DefaultParam .CL2_QPS 100}}
+{{$warmpool_size := DefaultParam .CL2_WARMPOOL_SIZE 200}}
+{{$namespacePrefix := DefaultParam .CL2_NAMESPACE_PREFIX "agent-sandbox"}}
+{{$burstSize := DefaultParam .CL2_BURST_SIZE 50}}
+{{$totalBursts := DefaultParam .CL2_TOTAL_BURSTS 100}}
+{{$SLEEP_FOR_CLUSTER_PREP := DefaultParam .CL2_SLEEP_FOR_CLUSTER_PREP "10m"}}
+
+name: agent-sandbox-rapid-burst
+namespace:
+  number: {{$namespaces}}
+  prefix: {{$namespacePrefix}}
+tuningSets:
+- name: BurstCreate
+  qpsLoad:
+    qps: {{$qps}}
+
+steps:
+- name: Waiting for {{$SLEEP_FOR_CLUSTER_PREP}} before starting the test to allow cluster preparation.
+  measurements:
+  - Identifier: WaitForClusterPrep
+    Method: Sleep
+    Params:
+      duration: 0s
+
+- name: Start Startup Latency Measurement
+  measurements:
+  - Identifier: SandboxStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: "app=agent-sandbox-load-test"
+
+- name: Setup Sandbox Template
+  phases:
+  - namespaceRange: {min: 1, max: {{$namespaces}}}
+    replicasPerNamespace: 1
+    tuningSet: BurstCreate
+    objectBundle:
+    - basename: template
+      objectTemplatePath: "cluster-loader-sandbox-template.yaml"
+
+- name: Setup Sandbox Warm Pool
+  phases:
+  - namespaceRange: {min: 1, max: {{$namespaces}}}
+    replicasPerNamespace: 1
+    tuningSet: BurstCreate
+    objectBundle:
+    - basename: warmpool
+      objectTemplatePath: "cluster-loader-sandbox-warmpool-custom.yaml"
+
+- name: Wait for Warm Pool Pods to be Ready
+  measurements:
+  - Identifier: WaitForWarmPoolPods
+    Method: WaitForRunningPods
+    Params:
+      action: start
+      labelSelector: "agents.x-k8s.io/pool"
+      desiredPodCount: {{MultiplyInt $warmpool_size $namespaces}}
+
+# --- START BURST LOOP ---
+{{range $i := Loop $totalBursts}}
+{{$burstIteration := AddInt $i 1}}
+{{$replicaCount := MultiplyInt $burstIteration $burstSize}}
+
+- name: Create Burst {{$burstIteration}} Sandbox Claims ({{$burstSize}})
+  phases:
+  - namespaceRange: {min: 1, max: {{$namespaces}}}
+    replicasPerNamespace: {{$replicaCount}}
+    tuningSet: BurstCreate
+    objectBundle:
+    - basename: agent-claim
+      objectTemplatePath: "cluster-loader-sandbox-claim.yaml"
+
+- name: Wait for Burst {{$burstIteration}} Sandbox Claims to be Ready
+  measurements:
+  - Identifier: WaitForBurst{{$burstIteration}}SandboxClaims
+    Method: WaitForGenericK8sObjects
+    Params:
+      action: start
+      objectGroup: extensions.agents.x-k8s.io
+      objectVersion: v1alpha1
+      objectResource: sandboxclaims
+      namespaceRange: {min: 1, max: {{$namespaces}}}
+      successfulConditions: ["Ready=True"]
+      failedConditions: []
+      minDesiredObjectCount: {{MultiplyInt $replicaCount $namespaces}}
+      maxFailedObjectCount: 0
+      timeout: 60m
+      refreshInterval: 20ms
+
+- name: Pause 10 Seconds After Burst {{$burstIteration}}
+  measurements:
+  - Identifier: WaitAfterBurst{{$burstIteration}}
+    Method: Sleep
+    Params:
+      duration: 10s
+{{end}}
+# --- END BURST LOOP ---
+
+- name: Gather Results
+  measurements:
+  - Identifier: SandboxStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather
+      labelSelector: "app=agent-sandbox-load-test"
+
+- name: Delete Sandbox Claims
+  phases:
+  - namespaceRange: {min: 1, max: {{$namespaces}}}
+    replicasPerNamespace: 0
+    tuningSet: BurstCreate
+    objectBundle:
+    - basename: agent-claim
+      objectTemplatePath: "cluster-loader-sandbox-claim.yaml"
+
+- name: Delete Sandbox Warm Pool
+  phases:
+  - namespaceRange: {min: 1, max: {{$namespaces}}}
+    replicasPerNamespace: 0
+    tuningSet: BurstCreate
+    objectBundle:
+    - basename: warmpool
+      objectTemplatePath: "cluster-loader-sandbox-warmpool-custom.yaml"
+
+- name: Delete Sandbox Templates
+  phases:
+  - namespaceRange: {min: 1, max: {{$namespaces}}}
+    replicasPerNamespace: 0
+    tuningSet: BurstCreate
+    objectBundle:
+    - basename: template
+      objectTemplatePath: "cluster-loader-sandbox-template.yaml"

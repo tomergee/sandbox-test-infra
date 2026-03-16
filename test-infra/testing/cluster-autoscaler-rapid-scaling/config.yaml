@@ -1,0 +1,200 @@
+# Test consts
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER true}}
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}}
+{{$ENABLE_CONTAINER_RESTARTS_MEASUREMENT := DefaultParam .CL2_ENABLE_CONTAINER_RESTARTS_MEASUREMENT true}}
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}}
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}}
+{{$ENABLE_TEST_METRICS := DefaultParam .CL2_ENABLE_TEST_METRICS false}}
+{{$DAEMONSET_COUNT := DefaultParam .CL2_DAEMONSET_COUNT 6}}
+{{$DAEMONSET_CPU := DefaultParam .CL2_DAEMONSET_CPU 5}}
+{{$DAEMONSET_RAM := DefaultParam .CL2_DAEMONSET_RAM 20}}
+
+# Pod requirements
+{{$TARGET_NODES := DefaultParam .CL2_TARGET_NODES 200}}
+{{$POD_CPU := DefaultParam .CL2_POD_CPU 100}}
+{{$POD_RAM := DefaultParam .CL2_POD_RAM 100}}
+{{$MACHINE_TYPE := DefaultParam .CL2_MACHINE_TYPE "e2-medium"}}
+{{$USE_HIGH_THROUGHPUT_SCHEDULER := DefaultParam .CL2_USE_HIGH_THROUGHPUT_SCHEDULER false}}
+
+# Scale-up expectations
+{{$SCALEUP_TIMEOUT := DefaultParam .CL2_SCALEUP_TIMEOUT "2h"}}
+{{$P50_POD_STARTUP_THRESHOLD := DefaultParam .CL2_P50_POD_STARTUP_THRESHOLD "4m"}}
+{{$P90_POD_STARTUP_THRESHOLD := DefaultParam .CL2_P90_POD_STARTUP_THRESHOLD "6m"}}
+{{$P99_POD_STARTUP_THRESHOLD := DefaultParam .CL2_P99_POD_STARTUP_THRESHOLD "10m"}}
+{{$MAX_POD_STARTUP_THRESHOLD := DefaultParam .CL2_MAX_POD_STARTUP_THRESHOLD "15m"}}
+
+# Scale-down expectations
+{{$SCALE_DOWN_TIMEOUT := DefaultParam .CL2_SCALE_DOWN_TIMEOUT "2h"}}
+
+name: cluster-autoscaler
+namespace:
+  number: {{$DAEMONSET_COUNT}}
+tuningSets:
+- name: QpsTuningSet
+  QpsLoad:
+    qps: 1
+steps:
+- name: Starting measurements
+  measurements:
+  {{if $ENABLE_TEST_METRICS}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{$CLUSTER_OOMS_IGNORED_PROCESSES}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: start
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+
+- name: Create CCC
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: app-cc
+      objectTemplatePath: ccc.yaml
+      templateFillMap:
+        MachineType: {{$MACHINE_TYPE}}
+
+- name: Create Daemonsets
+  phases:
+  - replicasPerNamespace: 1
+    namespaceRange:
+      min: 1
+      max: {{$DAEMONSET_COUNT}}
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: app-daemonset
+      objectTemplatePath: daemonset.yaml
+      templateFillMap:
+        DaemonSetCpuRequest: {{$DAEMONSET_CPU}}
+        DaemonSetMemoryRequest: {{$DAEMONSET_RAM}}
+
+- name: Create one-per-node deployment
+  phases:
+  - replicasPerNamespace: 1
+    namespaceRange:
+      min: 1
+      max: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: app-deployment
+      objectTemplatePath: deployment-hostport-ccc.yaml
+      templateFillMap:
+        Replicas: {{$TARGET_NODES}}
+        UseHTScheduler: {{$USE_HIGH_THROUGHPUT_SCHEDULER}}
+        CpuRequest: {{$POD_CPU}}
+        MemoryRequest: {{$POD_RAM}}
+
+- name: Starting measurements for scale-up
+  measurements:
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: app = app-deployment
+      perc50Threshold: {{$P50_POD_STARTUP_THRESHOLD}}
+      perc90Threshold: {{$P90_POD_STARTUP_THRESHOLD}}
+      perc99Threshold: {{$P99_POD_STARTUP_THRESHOLD}}
+      threshold: {{$MAX_POD_STARTUP_THRESHOLD}}
+  - Identifier: WaitForDeploymentPodsRunning
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: app = app-deployment
+      operationTimeout: {{$SCALEUP_TIMEOUT}}
+      checkIfPodsAreUpdated: false
+
+- name: Wait for deployment pods ready
+  measurements:
+  - Identifier: WaitForDeploymentPodsRunning
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Collect pod startup latency
+  measurements:
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather
+
+- name: Delete scale-up deployments
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: app-deployment
+      objectTemplatePath: deployment-hostport-ccc.yaml
+
+- name: Wait for scale-down of empty nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      labelSelector: cloud.google.com/compute-class
+      minDesiredNodeCount: 0
+      maxDesiredNodeCount: 0
+      timeout: {{$SCALE_DOWN_TIMEOUT}}
+
+- name: Collecting measurements
+  measurements:
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  {{if $ENABLE_TEST_METRICS}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+  {{end}}
+  - Identifier: Quotas total usage
+    Method: GenericPrometheusQuery
+    Params:
+      action: gather
+      metricName: Quota usage
+      metricVersion: v1
+      prometheusClient: managed
+      unit: QPMs
+      dimensions:
+      - quota_metric
+      queries:
+      - name: perc99
+        query: quantile_over_time(0.99, sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60
+      - name: max
+        query: max_over_time(sum by (quota_metric) (irate(serviceruntime_googleapis_com:quota_rate_net_usage{monitored_resource="consumer_quota"}[1m]))[%v:]) * 60

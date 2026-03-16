@@ -1,0 +1,32 @@
+## Input params
+{{$bigHPAsNamespaces := .bigHPAsNamespaces}}
+{{$namespaces := .namespaces}}
+
+
+steps:
+- name: Deleting saturation pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$bigHPAsNamespaces}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedDeletionTimeLimited
+    objectBundle:
+    - basename: big-deployment
+      objectTemplatePath: hpa-cpu/deployment.yaml
+    - basename: big-hpa
+      objectTemplatePath: hpa-cpu/hpa.yaml
+    - basename: big-vpa
+      objectTemplatePath: hpa-cpu/vpa.yaml
+  - namespaceRange:
+      min: {{AddInt $bigHPAsNamespaces 1}}
+      max: {{$namespaces}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedDeletionTimeLimited
+    objectBundle:
+    - basename: small-deployment
+      objectTemplatePath: hpa-cpu/deployment.yaml
+    - basename: small-hpa
+      objectTemplatePath: hpa-cpu/hpa.yaml
+    - basename: small-vpa
+      objectTemplatePath: hpa-cpu/vpa.yaml

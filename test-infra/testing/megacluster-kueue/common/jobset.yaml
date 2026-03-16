@@ -1,0 +1,116 @@
+# ==============================================================================
+# Kubernetes JobSet Configuration Template
+#
+# This template defines a Kubernetes JobSet resource. It manages a single
+# replicated Job that uses indexed completion for parallel tasks.
+# It includes integration with Kueue, allowing labels and topology annotations
+# to be applied either at the JobSet level or at the individual
+# replicatedJob level, based on KueueIntegrationScope.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}}            # Default CPU request per pod replica.
+{{$MemoryRequest := DefaultParam .MemoryRequest ""}}        # Default Memory is no memory
+{{$Size := DefaultParam .Size 10}}                          # Number of parallel pods/completions for the inner indexed Job.
+{{$BindPort := DefaultParam .BindPort false}}               # If true, bind a specific host port to the container port.
+{{$PriorityClass := .PriorityClass}}                        # The Kubernetes PriorityClass name. Used by Kueue.
+{{$QueueName := .QueueName}}                                # The target Kueue LocalQueue name.
+{{$Group := .Group}}                                        # Label value for grouping related resources.
+{{$WorkloadType := .WorkloadType}}                          # Label value indicating the type of workload.
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}} # Specifies the Kubernetes scheduler for the pods.
+{{$PreferredTopology := DefaultParam .PreferredTopology ""}}      # Preference for pods to be scheduled within the specified topology domain.
+{{$RequiredTopology := DefaultParam .RequiredTopology ""}}        # Requirement for pods to be scheduled within the specified topology domain.
+{{$RequiredSliceTopology := DefaultParam .RequiredSliceTopology ""}} # Requirement for podset group to be scheduled within the specified topology domain.
+{{$PodPayloadSize := DefaultParam .PodPayloadSize "1"}}          # Extra payload size in the form of env variable.
+{{$ReplicatedJobEntryName := DefaultParam .ReplicatedJobEntryName "main-indexed-job"}} # Name for the entry within replicatedJobs.
+{{$KueueIntegrationScope := DefaultParam .CL2_TAS_JOBSET_INTEGRATION_SCOPE "jobset"}} # Scope for Kueue labels & topology: "jobset" or "replicatedjob".
+{{$Replicas := DefaultParam .Replicas 1}}      # Number of replicas for the replica job.
+# ==============================================================================
+# JobSet Resource Definition
+# ==============================================================================
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: {{.Name}}
+  labels:
+    {{if and (eq $KueueIntegrationScope "jobset") $QueueName}}
+    kueue.x-k8s.io/queue-name: {{$QueueName}}
+    kueue.x-k8s.io/priority-class: {{$PriorityClass}} # PriorityClass for the JobSet, considered by Kueue
+    {{end}}
+    group: {{$Group}}
+    type: {{$WorkloadType}}
+spec:
+  {{if and (eq $KueueIntegrationScope "jobset") $QueueName}}
+  suspend: true # JobSet is suspended if Kueue manages it at the JobSet level.
+  {{else}}
+  suspend: false # JobSet is not suspended by default if Kueue integration is at replicatedJob level or no queue.
+  {{end}}
+  replicatedJobs:
+  - name: {{$ReplicatedJobEntryName}} # Name of this replicated job configuration
+    replicas: {{$Replicas}}
+    template: # This is a Job template
+      metadata: # Metadata for the Job(s) created by this replicatedJob entry
+        labels:
+          {{if and (eq $KueueIntegrationScope "replicatedjob") $QueueName}}
+          kueue.x-k8s.io/queue-name: {{$QueueName}}
+          kueue.x-k8s.io/priority-class: {{$PriorityClass}} # Kueue labels for this specific Job
+          {{end}}
+          group: {{$Group}}
+          type: {{$WorkloadType}}
+      spec: # Spec for the Job(s) created by this entry
+        {{if and (eq $KueueIntegrationScope "replicatedjob") $QueueName}}
+        suspend: true # This Job (within JobSet) needs to be suspended if Kueue manages it directly.
+        {{end}}
+        # If KueueIntegrationScope is "jobset", the JobSet's suspend status dictates the
+        # initial suspended state of the managed Jobs. Kueue will unsuspend the JobSet,
+        # and the JobSet controller will then unsuspend the managed Jobs.
+        # So, no explicit 'suspend' is needed on the Job template here for "jobset" scope.
+        parallelism: {{$Size}} # Number of pods to run in parallel for this Job.
+        completions: {{$Size}} # Total number of successful completions needed for this Job.
+        completionMode: Indexed # Pods get a unique index from 0 to .spec.completions-1.
+        template: # This is the Pod template
+          metadata:
+            labels: # Labels for the Pods
+              type: {{$WorkloadType}}
+              group: {{$Group}}
+            annotations:
+              {{if $PreferredTopology}}
+              kueue.x-k8s.io/podset-preferred-topology: {{$PreferredTopology}}
+              {{end}}
+              {{if $RequiredTopology}}
+              kueue.x-k8s.io/podset-required-topology: {{$RequiredTopology}}
+              {{end}}
+              {{if $RequiredSliceTopology}}
+              kueue.x-k8s.io/podset-slice-required-topology: {{$RequiredSliceTopology}}
+              kueue.x-k8s.io/podset-slice-size: "{{$Size}}"
+              {{end}}
+          spec: # Pod specification
+            automountServiceAccountToken: false
+            schedulerName: {{$SchedulerName}}
+            restartPolicy: OnFailure
+            nodeSelector:
+              worker-node-pool: "true"
+            tolerations:
+            - key: "workload"
+              operator: "Equal"
+              value: "kueue-workload"
+              effect: "NoExecute"
+            containers:
+            - name: "{{$WorkloadType}}-pod"
+              env:
+              - name: ENV_VAR
+                value: "{{RandData $PodPayloadSize}}"
+              image: us-docker.pkg.dev/gke-scalability-images/gcr.io/pause:3.0
+              {{if $BindPort}}
+              ports:
+              - containerPort: 1328
+                hostPort: 1328
+              {{end}}
+              resources:
+                requests:
+                  cpu: {{$CpuRequest}}
+                  {{if $MemoryRequest}}
+                  memory: {{$MemoryRequest}}
+                  {{end}}

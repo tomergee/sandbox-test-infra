@@ -1,0 +1,10 @@
+[
+  {"job-size": "1-replica", "jobs-updated-daily": 254},
+  {"job-size": "5-replica", "jobs-updated-daily": 113},
+  {"job-size": "10-replica", "jobs-updated-daily": 80},
+  {"job-size": "50-replica", "jobs-updated-daily": 26},
+  {"job-size": "100-replica", "jobs-updated-daily": 31},
+  {"job-size": "500-replica", "jobs-updated-daily": 8},
+  {"job-size": "1000-replica", "jobs-updated-daily": 3},
+  {"job-size": "5000-replica", "jobs-updated-daily": 1}
+]

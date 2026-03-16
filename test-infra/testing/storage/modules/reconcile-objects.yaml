@@ -1,0 +1,147 @@
+## Input params
+# Valid actions: "create", "scale and update", "delete"
+{{$actionName := printf "%s objects" .actionName}}
+{{$namespaces := .namespaces}}
+{{$tuningSet := .tuningSet}}
+
+# Derivative variables
+{{$is_deleting := (eq .actionName "delete")}}
+
+# StatefulSets
+{{$statefulSetSize := .statefulSetSize}}
+{{$statefulSetsPerNamespace := .statefulSetsPerNamespace}}
+
+# Deployments
+{{$deploymentSize := .deploymentSize}}
+{{$deploymentsPerNamespace := .deploymentsPerNamespace}}
+
+# PV
+{{$pvStatefulSetSize := DefaultParam .pvStatefulSetSize 0}}
+
+## CL2 params
+{{$CHECK_IF_PODS_ARE_UPDATED := DefaultParam .CL2_CHECK_IF_PODS_ARE_UPDATED true}}
+
+# Both statefulset and deployments can be used independently or together as per requirement
+{{$USE_DEPLOYMENT := DefaultParam .USE_DEPLOYMENT false}}
+{{$NEEDS_PRE_POPULATED_VOLUME := DefaultParam .NEEDS_PRE_POPULATED_VOLUME false}}
+{{$USE_STATEFULSET := DefaultParam .USE_STATEFULSET true}}
+
+steps:
+- name: Starting measurement for '{{$actionName}}'
+  measurements:
+  {{if $USE_STATEFULSET}}
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningStatefulSets
+      Params:
+        apiVersion: apps/v1
+        kind: StatefulSet
+    Params:
+      action: start
+      checkIfPodsAreUpdated: {{$CHECK_IF_PODS_ARE_UPDATED}}
+      labelSelector: group = load
+      operationTimeout: 400m
+  {{end}}
+  {{if $USE_DEPLOYMENT}}
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+      Params:
+        apiVersion: apps/v1
+        kind: Deployment
+    Params:
+      action: start
+      checkIfPodsAreUpdated: {{$CHECK_IF_PODS_ARE_UPDATED}}
+      labelSelector: group = load
+      operationTimeout: 400m
+  {{end}}
+
+- name: {{$actionName}}
+  phases:
+  {{if $USE_STATEFULSET}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: {{$statefulSetsPerNamespace}}
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+    - basename: medium-statefulset
+      objectTemplatePath: statefulset_service.yaml
+    - basename: medium-statefulset
+      objectTemplatePath: statefulset.yaml
+      templateFillMap:
+        Replicas: {{$statefulSetSize}}
+  {{if $is_deleting}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 0
+    tuningSet: Global100qps
+    objectBundle:
+  {{range $ssIndex := Loop $pvStatefulSetSize}}
+      - basename: storage-pv-medium-statefulset-{{$ssIndex}}
+        objectTemplatePath: pvc.yaml
+        listUnknownObjectOptions:
+          labelSelector:
+            matchLabels:
+              name: medium-statefulset-{{$ssIndex}}
+  {{end}}
+  {{end}}
+  {{end}}
+
+  {{if $USE_DEPLOYMENT}}
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: {{$deploymentsPerNamespace}}
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+    {{if $NEEDS_PRE_POPULATED_VOLUME}}
+    - basename: cloned-pvc
+      objectTemplatePath: cloned-pvc.yaml
+      templateFillMap:
+        pvc_name: pre-existing-volume-0
+    {{else}}
+    - basename: sample-pvc
+      objectTemplatePath: sample-pvc.yaml
+      templateFillMap:
+        group: load
+    {{end}}
+    - basename: small-deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$deploymentSize}}
+        {{if $NEEDS_PRE_POPULATED_VOLUME}}
+        pvc_name: cloned-pvc-0
+        {{else}}
+        pvc_name: sample-pvc-0
+        {{end}}
+        group: load
+  {{end}}
+
+
+- name: Waiting for '{{$actionName}}' to be completed
+  measurements:
+  {{if $USE_STATEFULSET}}
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningStatefulSets
+    Params:
+      action: gather
+  {{end}}
+  {{if $USE_DEPLOYMENT}}
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+    Params:
+      action: gather
+  {{end}}
+
+{{if $is_deleting}}
+  - Identifier: WaitForPVCsToBeDeleted
+    Method: WaitForBoundPVCs
+    Params:
+      desiredPVCCount: 0
+      labelSelector: group = load
+      timeout: 150m
+{{end}}

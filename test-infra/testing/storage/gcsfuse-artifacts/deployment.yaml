@@ -1,0 +1,164 @@
+# This file currently implements manual deployment of gcsfuse pods in a GKE cluster. Manual deployment is needed because at scale WI fails for some pods due to GKE Metadata Server not serving the federated token fast enough. This manual injection work around is needed until gke team completes WI readiness check client side. b/416515223
+# TODO(b/411179930): Remove manual deployment of gcsfuse pods once WI readiness check is implemented client side.
+#
+# Note: The FIO test configurations (e.g., block size, read/write patterns) are not defined in this deployment.yaml.
+# The test logic is contained in .fio files within the GoogleCloudPlatform/gcsfuse-tools repository,
+# which is cloned and executed by the 'test-workload' initContainer.
+#
+# Data for read tests is pre-populated in the bucket.
+# To update existing tests, add new tests, or manage test data, please refer to the
+# instructions in the README.md file:
+# https://github.com/GoogleCloudPlatform/gcsfuse-tools/blob/main/gke-fio-tests/README.md
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{.Name}}
+  namespace: gcsfuse-scale-test-1
+  labels:
+    group: {{.group}}
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      group: {{.group}}
+      app: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: {{.group}}
+        app: {{.Name}}
+      # Comment out or the webhook will inject the sidecar.
+      annotations:
+        gke-gcsfuse/volumes: "true"
+
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                group: {{.group}}
+                app: {{.Name}}
+            topologyKey: "kubernetes.io/hostname"
+      serviceAccountName: gcs-fuse-pod-sa
+      initContainers:
+      - name: test-workload
+        image: google/cloud-sdk:slim
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          set -e
+
+          apt-get update && apt-get install -y fio curl git jq >/dev/null 2>&1
+
+          git clone https://github.com/GoogleCloudPlatform/gcsfuse-tools.git
+          cd gcsfuse-tools/gke-fio-tests
+
+          TARGET_BASE="/test-mnt/fio_sequential_write/${POD_NAME}"
+          OUTPUT_BASE="/tmp"
+
+          cleanup() {
+            cd ~
+            rm -rf "${TARGET_BASE}"
+          }
+          trap cleanup EXIT
+
+          for dir in */; do
+            dir_name="$(basename "$dir")"
+            mkdir -p "${OUTPUT_BASE}/${dir_name}"
+
+            cd "$dir"
+
+            for fio_file in *.fio; do
+              file_name="$(basename "$fio_file" .fio)"
+              mkdir -p "${OUTPUT_BASE}/${dir_name}/${file_name}"
+
+              if [[ "$dir_name" == *read ]]; then
+                FIO_DIR="/test-mnt/fio_${dir_name}}"
+              else
+                FIO_DIR="${TARGET_BASE}"
+              fi
+
+              mkdir -p "${FIO_DIR}"
+
+              result_file="${OUTPUT_BASE}/${dir_name}/${file_name}/result.json"
+
+              # Run fio and clean up non-JSON logs
+              DIR="${FIO_DIR}" fio "$fio_file" \
+                --output-format=json 2>&1 \
+                | sed -n '/^{/,$p' > "$result_file"
+
+              exit_code=$?
+              if [ $exit_code -eq 0 ]; then
+                echo "SUCCESS" > "${OUTPUT_BASE}/${dir_name}/${file_name}/fio_status.txt"
+              else
+                echo "FAIL" > "${OUTPUT_BASE}/${dir_name}/${file_name}/fio_status.txt"
+              fi
+
+              rw_mode=$(grep -i "^rw=" "$fio_file" | cut -d= -f2 | tr -d '[:space:]')
+              if [[ "$rw_mode" =~ ^write|randwrite|trimwrite$ ]]; then
+                direction="write"
+              else
+                direction="read"
+              fi
+
+              total_bw_bytes=$(jq "[.jobs[].${direction}.bw_bytes] | add" "$result_file")
+              total_bw_MBps=$(awk "BEGIN {printf \"%.2f\", $total_bw_bytes / 1000000}")
+              echo "${total_bw_MBps}" > "${OUTPUT_BASE}/${dir_name}/${file_name}/bandwidth.txt"
+
+            done
+
+            cd ..
+          done
+
+          echo "=== All tests completed for pod: ${POD_NAME} ==="
+          echo "---"
+          echo "Results for pod ${POD_NAME}:"
+          find "${OUTPUT_BASE}" -mindepth 2 -maxdepth 2 -type d | while read -r result_dir; do
+            test_name=$(echo "$result_dir" | sed "s|${OUTPUT_BASE}/||")
+            echo "--- Test: ${test_name} ---"
+            echo "Status: $(cat "${result_dir}/fio_status.txt")"
+            echo "Bandwidth (MBps): $(cat "${result_dir}/bandwidth.txt")"
+            echo "FIO JSON Result:"
+            cat "${result_dir}/result.json"
+            echo
+          done
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 5Gi
+        volumeMounts:
+        - mountPath: /test-mnt
+          name: my-volume
+      containers:
+        - name: {{.Name}}
+          image: nginx
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: "1m"
+              ephemeral-storage: "100Ki"
+          volumeMounts:
+          - mountPath: /test-mnt
+            name: my-volume
+      volumes:
+      - name: my-volume
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            skipCSIBucketAccessCheck: "{{.GCS_FUSE_SKIP_BUCKET_CHECK}}"
+            bucketName: {{.BUCKET_NAME}}
+            disableMetrics: "{{.GCS_FUSE_DISABLE_METRICS}}"
+            gcsfuseMetadataPrefetchOnMount: "{{.GCS_FUSE_ENABLE_METADATA_PREFETCH}}"
+      - emptyDir: {}
+        name: gke-gcsfuse-tmp
+      - emptyDir: {}
+        name: gke-gcsfuse-buffer
+      - emptyDir: {}
+        name: gke-gcsfuse-cache

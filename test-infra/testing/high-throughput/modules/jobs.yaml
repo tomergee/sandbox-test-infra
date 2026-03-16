@@ -1,0 +1,94 @@
+{{$cpuRequest := DefaultParam .cpuRequest "5m"}}
+{{$basename := DefaultParam .basename (printf "job-%s-%.0f" .mode .size)}}
+{{$jobRunningTime := DefaultParam .jobRunningTime "5s"}}
+{{$threshold := DefaultParam .throughputThreshold 0}}
+{{$objectTemplatePath := DefaultParam .objectTemplatePath "job.yaml"}}
+{{$replicasPerNamespace := DefaultParam .replicasPerNamespace 1}}
+{{$jobDurationTimeout := DefaultParam .jobDurationTimeout "10m"}}
+{{$backoffLimit := DefaultParam .backoffLimit 6}}
+
+steps:
+- name: Starting measurements for {{.mode}} jobs
+  measurements:
+  - Identifier: WaitForFinishedJobs
+    Method: WaitForFinishedJobs
+    Params:
+      action: start
+      labelSelector: group = load
+  - Identifier: JobLifecycleLatency
+    Method: JobLifecycleLatency
+    Params:
+      action: start
+      labelSelector: group = load
+
+{{if .create}}
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: {{$basename}}
+      action: start
+      threshold: {{$threshold}}
+- name: Creating {{.mode}} jobs of size {{.size}}
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: {{$replicasPerNamespace}}
+    tuningSet: default
+    objectBundle:
+    - basename: {{$basename}}
+      objectTemplatePath: {{$objectTemplatePath}}
+      templateFillMap:
+        Replicas: {{.size}}
+        Mode: {{.mode}}
+        CpuRequest: {{$cpuRequest}}
+        Sleep: {{$jobRunningTime}}
+        BackoffLimit: {{$backoffLimit}}
+- name: Wait for {{.mode}} jobs to finish
+  measurements:
+  - Identifier: JobLifecycleLatency
+    Method: JobLifecycleLatency
+    Params:
+      action: gather
+      timeout: {{$jobDurationTimeout}}
+  - Identifier: WaitForFinishedJobs
+    Method: WaitForFinishedJobs
+    Params:
+      action: gather
+      timeout: {{$jobDurationTimeout}}
+- module:
+    path: modules/scheduling-throughput.yaml
+    params:
+      basename: {{$basename}}
+      action: gather
+{{end}}
+
+{{if .delete}}
+- name: Starting measurements for jobs
+  measurements:
+  - Identifier: WaitForDeletedPods
+    Method: WaitForControlledPodsRunning
+    Params:
+      apiVersion: batch/v1
+      kind: Job
+      action: start
+      labelSelector: group = load
+      operationTimeout: 10m
+- name: Deleting {{.mode}} jobs
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: {{$basename}}
+      objectTemplatePath: {{$objectTemplatePath}}
+- name: Waiting for pods to be deleted
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForDeletedPods
+    Params:
+      action: gather
+{{end}}

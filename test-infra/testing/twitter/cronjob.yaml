@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{.Name}}
+spec:
+  schedule: "@every {{.IntervalMins}}m"
+  jobTemplate:
+    spec:
+      parallelism: {{.InstanceCount}}
+      template:
+        spec:
+          containers:
+          - name: hello
+            image: busybox
+            args:
+            - /bin/sh
+            - -c
+            - sleep 30
+            resources:
+              requests:
+                cpu: {{.Cores}}
+                memory: 10Mi
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 1
+          automountServiceAccountToken: false
+          # Add not-ready/unreachable tolerations for 15 minutes so that node
+          # failure doesn't trigger pod deletion.
+          tolerations:
+            - key: "node.kubernetes.io/not-ready"
+              operator: "Exists"
+              effect: "NoExecute"
+              tolerationSeconds: 900
+            - key: "node.kubernetes.io/unreachable"
+              operator: "Exists"
+              effect: "NoExecute"
+              tolerationSeconds: 900

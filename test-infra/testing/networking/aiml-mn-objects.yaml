@@ -1,0 +1,53 @@
+{{$aiMlSize := DefaultParam .CL2_MN_STATEFULSET_SIZE 30}}
+{{$action := .action}}
+{{$timeout := DefaultParam .CL2_MN_STATEFULSET_TIMEOUT "30m"}}
+
+steps:
+{{ if eq $action "create" }}
+- module:
+    path: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-reconcile-objects.yaml
+    params:
+      actionName: "create"
+      operationTimeout: {{$timeout}}
+      replicasA: 0
+      replicasB: 1
+      size: {{$aiMlSize}}
+{{ end }}
+{{ if eq $action "scale and update" }}
+- module:
+    path: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-reconcile-objects.yaml
+    params:
+      actionName: "restart"
+      operationTimeout: {{$timeout}}
+      replicasA: 1
+      replicasB: 0
+      size: {{$aiMlSize}}
+
+- module:
+    path: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-reconcile-objects.yaml
+    params:
+      actionName: "delete"
+      operationTimeout: {{$timeout}}
+      replicasA: 0
+      replicasB: 0
+      size: {{$aiMlSize}}
+
+- module:
+    path: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-reconcile-objects.yaml
+    params:
+      actionName: "recreate"
+      operationTimeout: {{$timeout}}
+      replicasA: 1
+      replicasB: 0
+      size: {{$aiMlSize}}
+{{ end }}
+{{ if eq $action "delete" }}
+- module:
+    path: ../../../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/networking/aiml-mn-reconcile-objects.yaml
+    params:
+      actionName: "delete"
+      operationTimeout: {{$timeout}}
+      replicasA: 0
+      replicasB: 0
+      size: {{$aiMlSize}}
+{{ end }}

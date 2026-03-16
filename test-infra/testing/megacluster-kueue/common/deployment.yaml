@@ -1,0 +1,78 @@
+# ==============================================================================
+# Kubernetes Deployment Configuration Template
+#
+# This template defines a Kubernetes Deployment resource, typically used for
+# running stateless applications like inference servers. It includes integration
+# with Kueue via labels.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}} # Default CPU request per pod replica.
+{{$MemoryRequest := DefaultParam .MemoryRequest ""}} # Default Memory is no memory
+{{$Size := DefaultParam .Size 10}}             # Number of replicas (pods) for the Deployment. Note: Often '.Replicas' is used, ensure consistency with calling context.
+{{$BindPort := DefaultParam .BindPort false}}   # If true, bind a specific host port to the container port.
+{{$PriorityClass := .PriorityClass}}           # The Kubernetes PriorityClass name for these pods. Used by Kueue.
+{{$QueueName := .QueueName}}                   # The target Kueue LocalQueue name for this Deployment's pods.
+{{$Group := .Group}}                           # Label value for grouping related resources (e.g., for measurements in ClusterLoader2).
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}} # Specifies the Kubernetes scheduler to use.
+{{$PodPayloadSize := DefaultParam .PodPayloadSize "1"}} # Extra payload size in the form of env variable to increase object size
+
+# ==============================================================================
+# Deployment Resource Definition
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    {{if $QueueName}}
+    kueue.x-k8s.io/queue-name: {{$QueueName}}
+    kueue.x-k8s.io/priority-class: {{$PriorityClass}}
+    {{end}}
+    type: inference
+    group: {{$Group}}
+spec:
+  replicas: {{$Size}}
+  selector:
+    matchLabels:
+      app: inference
+  template:
+    metadata:
+      labels:
+        app: inference
+        type: inference
+        group: {{$Group}}
+        {{if $QueueName}}
+        kueue.x-k8s.io/queue-name: {{$QueueName}}
+        kueue.x-k8s.io/priority-class: {{$PriorityClass}}
+        {{end}}
+    spec:
+      schedulerName: {{$SchedulerName}}
+      automountServiceAccountToken: false
+      restartPolicy: Always
+      nodeSelector:
+        worker-node-pool: "true"
+      tolerations:
+      - key: "workload"
+        operator: "Equal"
+        value: "kueue-workload"
+        effect: "NoExecute"
+      containers:
+      - name: inference
+        env:
+        - name: ENV_VAR
+          value: "{{RandData $PodPayloadSize}}"
+        image: us-docker.pkg.dev/gke-scalability-images/gcr.io/pause:3.0
+{{if $BindPort}}
+        ports:
+        - containerPort: 1328
+          hostPort: 1328
+{{end}}
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            {{if $MemoryRequest}}
+            memory: {{$MemoryRequest}}
+            {{end}}

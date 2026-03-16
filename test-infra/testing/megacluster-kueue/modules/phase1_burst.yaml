@@ -1,0 +1,221 @@
+# ==============================================================================
+# ClusterLoader2 Burst Workload Test Module
+#
+# This module defines a sequence of steps to test Kueue's handling of burst
+# workloads. It sets up a namespace and queues, then runs batches of jobs
+# of varying sizes (small, medium, large) using a common workload execution
+# module, followed by teardown.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Input Parameters & Calculated Variables
+# ------------------------------------------------------------------------------
+{{$Namespace := .Namespace}}                     # Base name for the namespace created in the test.
+
+{{$Multiplier := .CL2_MULTIPLIER}}               # A multiplier used for scaling resource requests and workload counts.
+
+{{$BIND_PORT := DefaultParam .CL2_BIND_PORT false}} # Whether workloads should bind a host port.
+{{$CpuRequest := DefaultParam .CL2_CPU_REQUEST "0.3"}} # Base CPU request per pod/replica.
+{{$SleepDuration := DefaultParam .CL2_SLEEP_DURATION "30s"}} # Default sleep duration used by the common module after workload steps.
+
+# --- Queue Configuration ---
+# Calculate nominal quota based on multiplier and base CPU request.
+{{$NOMINAL_QUOTA := MultiplyFloat $Multiplier $CpuRequest 10}}
+
+# --- Workload Configuration ---
+{{$BURST_BATCH_WORKLOAD_SIZE := 1}}              # Number of pods per Job (parallelism/completions). Keeping it 1 for simplicity here.
+
+# Calculate number of Job replicas for each burst size based on the multiplier.
+{{$SMALL_BURST_BATCH_WORKLOAD_REPLICAS := MultiplyInt $Multiplier 1}}
+{{$MEDIUM_BURST_BATCH_WORKLOAD_REPLICAS := MultiplyInt $Multiplier 4}}
+{{$LARGE_BURST_BATCH_WORKLOAD_REPLICAS := MultiplyInt $Multiplier 10}}
+
+# CPU request per pod for each burst size.
+{{$SMALL_BURST_CPU_REQUEST := $CpuRequest}}
+{{$MEDIUM_BURST_CPU_REQUEST := $CpuRequest}}
+{{$LARGE_BURST_CPU_REQUEST := $CpuRequest}}
+
+# Priority class for the burst workloads.
+{{$priorityClassLow := .priorityClassLow }}      # Assumes 'priorityClassLow' is passed into this module.
+
+# --- Measurement Configuration ---
+{{$ThroughputThreshold := DefaultParam .ThroughputThreshold 200}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{if lt $Multiplier 500}}
+{{$ThroughputThreshold = DefaultParam .ThroughputThreshold 30}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{end}}
+{{if lt $Multiplier 10}}
+{{$ThroughputThreshold = DefaultParam .ThroughputThreshold -1}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{end}}
+
+{{$PodStartupLatencyThreshold := DefaultParam .PodStartupLatencyThreshold "1m"}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+
+# ------------------------------------------------------------------------------
+# Phase 1: Initialization and Setup
+# ------------------------------------------------------------------------------
+
+- name: "Phase 1 - Init 0: Create Namespace {{$Namespace}}-0"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$Namespace}}
+        objectTemplatePath: common/namespace.yaml
+
+- name: "Phase 1 - Init 1: Create ClusterQueue (burst-queue-0) with Nominal Quota {{$NOMINAL_QUOTA}}"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: burst-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        Preemption: false
+
+- name: "Phase 1 - Init 2: Create LocalQueue (burst-local-queue-0)"
+  phases:
+  - namespaceList:
+    - "{{$Namespace}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: burst-local-queue
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        ClusterQueue: burst-queue-0
+
+# ------------------------------------------------------------------------------
+# Phase 1: Workload Execution (Using Common Module)
+# ------------------------------------------------------------------------------
+
+- name: "Phase 1 - Step 1: Run Small Burst Workloads ({{$SMALL_BURST_BATCH_WORKLOAD_REPLICAS}} Jobs)"
+  module:
+    path: modules/common_run_workloads.yaml # Path to the reusable workload module.
+    params:
+      # --- Basic Info ---
+      StepName: "Small Batch Burst Workloads"
+      StepId: SmallBurstBatchWorkloads
+      Group: small-batch-workload-burst
+      WorkloadName: small-batch-job-burst
+      WorkloadType: burst
+      TemplatePath: common/job.yaml
+      Phase: "Phase 1"
+      Step: "Step 1"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BURST_BATCH_WORKLOAD_SIZE}}       # Pods per Job (parallelism/completions).
+      Replicas: {{$SMALL_BURST_BATCH_WORKLOAD_REPLICAS}} # Number of Job objects to create.
+      CpuRequest: {{$SMALL_BURST_CPU_REQUEST}}   # CPU per pod.
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: burst-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}        # Pause after completion.
+      BindPort: {{$BIND_PORT}}                 # Bind host port
+      delete: true                           # Delete workloads after running.
+      DesiredRunningPods: {{MultiplyInt $SMALL_BURST_BATCH_WORKLOAD_REPLICAS $BURST_BATCH_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false    # Rely on DesiredRunningPods instead.
+      Timeout: "1m"                          # Max time for the step.
+      ThroughputThreshold: {{$ThroughputThreshold}} # Pod scheduling throughput threshold.
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}} # Pod startup latency threshold.
+      DiagnosticsPhase: "phase1"             # Subdir for diagnostic scripts.
+
+- name: "Phase 1 - Step 2: Run Medium Burst Workloads ({{$MEDIUM_BURST_BATCH_WORKLOAD_REPLICAS}} Jobs)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Medium Batch Burst Workloads"
+      StepId: MediumBurstBatchWorkloads
+      Group: medium-batch-workload-burst
+      WorkloadName: medium-batch-job-burst
+      WorkloadType: burst
+      TemplatePath: common/job.yaml
+      Phase: "Phase 1"
+      Step: "Step 2"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BURST_BATCH_WORKLOAD_SIZE}}
+      Replicas: {{$MEDIUM_BURST_BATCH_WORKLOAD_REPLICAS}}
+      CpuRequest: {{$MEDIUM_BURST_CPU_REQUEST}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: burst-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      DesiredRunningPods: {{MultiplyInt $MEDIUM_BURST_BATCH_WORKLOAD_REPLICAS $BURST_BATCH_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false
+      Timeout: "3m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase1"
+
+- name: "Phase 1 - Step 3: Run Large Burst Workloads ({{$LARGE_BURST_BATCH_WORKLOAD_REPLICAS}} Jobs)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Large Batch Burst Workloads"
+      StepId: LargeBurstBatchWorkloads
+      Group: large-batch-workload-burst
+      WorkloadName: large-batch-job-burst
+      WorkloadType: burst
+      TemplatePath: common/job.yaml
+      Phase: "Phase 1"
+      Step: "Step 3"
+      Namespace: "{{$Namespace}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BURST_BATCH_WORKLOAD_SIZE}}
+      Replicas: {{$LARGE_BURST_BATCH_WORKLOAD_REPLICAS}}
+      CpuRequest: {{$LARGE_BURST_CPU_REQUEST}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: burst-local-queue-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      DesiredRunningPods: {{MultiplyInt $LARGE_BURST_BATCH_WORKLOAD_REPLICAS $BURST_BATCH_WORKLOAD_SIZE}}
+      WaitForControlledPodsRunning: false
+      Timeout: "10m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase1"
+
+# ------------------------------------------------------------------------------
+# Phase 1: Teardown
+# ------------------------------------------------------------------------------
+
+# Note: Deleting namespace implicitly deletes namespaced resources like LocalQueue.
+# The common_run_workloads module should have deleted the jobs already (delete: true).
+- name: "Phase 1 - Teardown 1: Delete Namespace {{$Namespace}}-0"
+  phases:
+  - replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$Namespace}}
+        objectTemplatePath: common/namespace.yaml
+
+# Deleting cluster-scoped resources like ClusterQueue explicitly.
+- name: "Phase 1 - Teardown 2: Delete ClusterQueue (burst-queue-0)"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: burst-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        Preemption: true

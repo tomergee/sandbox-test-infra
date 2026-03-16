@@ -1,0 +1,6 @@
+resourceLimits:
+  - resourceType: 'cpu'
+    maximum: 9999999
+  - resourceType: 'memory'
+    maximum: 9999999
+diskSizeGb: 20

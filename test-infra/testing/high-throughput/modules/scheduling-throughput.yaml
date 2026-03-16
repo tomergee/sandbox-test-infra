@@ -1,0 +1,58 @@
+# Module to measure rate of scheduling pods.
+# Expects two params:
+# * basename: unique identifier
+# * action: start/gather
+#
+# Usage:
+#
+# - module:
+#     path: modules/scheduling-throughput.yaml
+#     params:
+#       basename: unique_name_for_subtest
+#       action: start
+#
+# [here do something that creates pods]
+#
+# - module:
+#     path: modules/scheduling-throughput.yaml
+#     params:
+#       basename: unique_name_for_subtest
+#       action: gather
+# The gather action will create a summary file with rate
+# pods binding calls that happened between start/gather calls.
+#
+# Implementation decision:
+#
+# It uses GenericPrometheusQuery instead of SchedulingThroughput or SchedulingThroughputPrometheus as:
+# * SchedulingThroughput is deprecated as it reimplements some logic achievable with simple prometheus query
+# * SchedulingThroughputPrometheus has been created before GenericPrometheusQuery and is missing some features.
+# * GenericPrometheusQuery is currently recommended way of creating prometheus-based measurements and has all
+#   features we need (multiple percentiles, multiple summaries).
+{{$query := `sum(irate(apiserver_request_total{verb="POST", resource="pods", subresource="binding",code="201"}[1m]))[%v:5s]`}}
+
+steps:
+- name: "{{.action}}ing scheduling throughput measurement"
+  measurements:
+  - Identifier: SchedulingThroughput_{{.basename}}
+    Method: GenericPrometheusQuery
+    Params:
+      action: {{.action}}
+      enableViolations: true
+      metricName: {{.basename}}
+      metricVersion: v1
+      unit: 1/s
+      queries:
+      - name: Max
+        query: max_over_time({{$query}})
+      - name: Avg
+        query: avg_over_time({{$query}})
+      - name: Perc99
+        query: quantile_over_time(0.99, {{$query}})
+        {{if .threshold}}
+        threshold: {{.threshold}}
+        lowerBound: true
+        {{end}}
+      - name: Perc90
+        query: quantile_over_time(0.90, {{$query}})
+      - name: Perc50
+        query: quantile_over_time(0.50, {{$query}})

@@ -1,0 +1,18 @@
+{{$gatewayName := (print .GatewayBaseName "-" .Index)}}
+{{$serviceName := (print .ServiceBaseName "-" .Index)}}
+
+
+kind: HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1beta1
+metadata:
+  name: {{.Name}}
+spec:
+  parentRefs:
+  - name: {{$gatewayName}}
+  rules:
+  - backendRefs:
+    - name: {{$serviceName}}
+      port: 8080
+    matches:
+    - path:
+        value: "{{.Path}}"

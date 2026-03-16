@@ -1,0 +1,347 @@
+# Test consts
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER true}}
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}}
+{{$ENABLE_SYSTEM_POD_METRICS:= DefaultParam .ENABLE_SYSTEM_POD_METRICS true}}
+{{$ENABLE_RESTART_COUNT_CHECK := DefaultParam .ENABLE_RESTART_COUNT_CHECK true}}
+{{$RESTART_COUNT_THRESHOLD_OVERRIDES:= DefaultParam .RESTART_COUNT_THRESHOLD_OVERRIDES ""}}
+{{$ALLOWED_SLOW_API_CALLS := DefaultParam .CL2_ALLOWED_SLOW_API_CALLS 0}}
+{{$ENABLE_API_AVAILABILITY_MEASUREMENT := DefaultParam .CL2_ENABLE_API_AVAILABILITY_MEASUREMENT false}}
+{{$API_AVAILABILITY_PERCENTAGE_THRESHOLD := DefaultParam .CL2_API_AVAILABILITY_PERCENTAGE_THRESHOLD 0.0}}
+{{$CUSTOM_API_CALL_THRESHOLDS := DefaultParam .CUSTOM_API_CALL_THRESHOLDS ""}}
+{{$ENABLE_CONTAINER_RESTARTS_MEASUREMENT := DefaultParam .CL2_ENABLE_CONTAINER_RESTARTS_MEASUREMENT false}}
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}}
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}}
+
+{{$MIN_NODE_COUNT := DefaultParam .CL2_MIN_NODE_COUNT 600}}
+{{$PHASE1_NODE_COUNT := DefaultParam .CL2_PHASE1_NODE_COUNT 6000}}
+{{$PHASE2_NODE_COUNT := DefaultParam .CL2_PHASE2_NODE_COUNT 10000}}
+{{$PHASE3_NODE_COUNT := DefaultParam .CL2_PHASE3_NODE_COUNT 14900}}
+{{$OPERATION_TIMEOUT := DefaultParam .CL2_OPERATION_TIMEOUT "60m"}}
+{{$NODE_COUNT_ERROR_MARGIN := DefaultParam .CL2_NODE_COUNT_ERROR_MARGIN 150}}
+# This tests covers empty node scale-down, but some of the nodes we expect
+# to be 'empty' will actually run kube-dns, meaning that significantly slower
+# non-empty scale-down may be required for those. An increased error margin
+# for scale-down helps reduce flakiness. See b/223559095 for details.
+{{$SCALE_DOWN_ERROR_MARGIN := DefaultParam .CL2_SCALE_DOWN_ERROR_MARGIN 225}}
+{{$ENABLE_VERIFY_ON_SCALE_UP := DefaultParam .CL2_ENABLE_VERIFY_ON_SCALE_UP false}}
+
+# Deprecated:
+# What we wanted to achieve was to have 1 pod per node.
+# In case of n1-highcpu-2, we use 2 core nodes, so using
+# 1.01 CPU request should be a simple way to get there.
+# e2 family have 940milli allocatable, so .5 CPU should be used.
+
+# Having 1 pod per node is currently ensured by host port
+# Small requests helps with generality
+{{$NODE_FREE_CPU := DefaultParam .CL2_NODE_FREE_CPU "10m"}}
+{{$NODE_FREE_RAM := DefaultParam .CL2_NODE_FREE_RAM "10Mi"}}
+
+name: bayer
+namespace:
+  number: 1
+tuningSets:
+- name: QpsTuningSet
+  QpsLoad:
+    qps: 1
+steps:
+
+- name: Starting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheus
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: start
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt $MIN_NODE_COUNT 100)}}
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: start
+      replicasPerProbe: {{AddInt 2 (DivideInt $MIN_NODE_COUNT 100)}}
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: start
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: start
+      systemPodMetricsEnabled: {{$ENABLE_SYSTEM_POD_METRICS}}
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      clusterOOMsIgnoredProcesses: {{$CLUSTER_OOMS_IGNORED_PROCESSES}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: {{$ENABLE_RESTART_COUNT_CHECK}}
+
+- name: Starting measurement for waiting for pods
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = bayer
+      operationTimeout: {{$OPERATION_TIMEOUT}}
+      countErrorMargin: {{$NODE_COUNT_ERROR_MARGIN}}
+      # TODO: Revisit this after https://github.com/kubernetes/perf-tests/issues/1547 is fixed.
+      checkIfPodsAreUpdated: false
+{{if $ENABLE_API_AVAILABILITY_MEASUREMENT}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: start
+      pollFrequency: "5s"
+      hostPollTimeoutSeconds: 5
+      threshold: {{$API_AVAILABILITY_PERCENTAGE_THRESHOLD}}
+{{end}}
+
+- name: Waiting for warmup nodes to be deleted
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $MIN_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+
+# Whole test is just 1 deployment with 1 pod / node.
+# Each pod uses same configmap. Note that the spec says:
+# "Number of Secrets per configmap per pod: 1 secret per configmap per pod"
+# This is a bit confusing (what does the secret per configmap mean?), but
+# since the secrets and configmap are handled in a simmilar way by k8s, let's
+# assume that we just have a single configmap.
+- name: Creating {{$PHASE1_NODE_COUNT}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: configmap
+      objectTemplatePath: configmap.yaml
+    - basename: deployment
+      objectTemplatePath: deployment-dynamic.yaml
+      templateFillMap:
+        Replicas: {{$PHASE1_NODE_COUNT}}
+        CpuRequest: {{$NODE_FREE_CPU}}
+        MemoryRequest: {{$NODE_FREE_RAM}}
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{if $ENABLE_VERIFY_ON_SCALE_UP}}
+- name: Verify number of nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $PHASE1_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $PHASE1_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+{{end}}
+
+- name: Scaling up to {{$PHASE2_NODE_COUNT}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: configmap
+      objectTemplatePath: configmap.yaml
+    - basename: deployment
+      objectTemplatePath: deployment-dynamic.yaml
+      templateFillMap:
+        Replicas: {{$PHASE2_NODE_COUNT}}
+        CpuRequest: {{$NODE_FREE_CPU}}
+        MemoryRequest: {{$NODE_FREE_RAM}}
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{if $ENABLE_VERIFY_ON_SCALE_UP}}
+- name: Verify number of nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $PHASE2_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $PHASE2_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+{{end}}
+
+- name: Scaling up to {{$PHASE3_NODE_COUNT}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: configmap
+      objectTemplatePath: configmap.yaml
+    - basename: deployment
+      objectTemplatePath: deployment-dynamic.yaml
+      templateFillMap:
+        Replicas: {{$PHASE3_NODE_COUNT}}
+        CpuRequest: {{$NODE_FREE_CPU}}
+        MemoryRequest: {{$NODE_FREE_RAM}}
+- name: Waiting for pods to be running
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{if $ENABLE_VERIFY_ON_SCALE_UP}}
+- name: Verify number of nodes
+  measurements:
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $PHASE3_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $PHASE3_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+{{end}}
+
+- name: Scaling down to {{$PHASE2_NODE_COUNT}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: configmap
+      objectTemplatePath: configmap.yaml
+    - basename: deployment
+      objectTemplatePath: deployment-dynamic.yaml
+      templateFillMap:
+        Replicas: {{$PHASE2_NODE_COUNT}}
+        CpuRequest: {{$NODE_FREE_CPU}}
+        MemoryRequest: {{$NODE_FREE_RAM}}
+- name: Waiting for nodes and pods to be scaled down
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $PHASE2_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $PHASE2_NODE_COUNT $SCALE_DOWN_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+
+- name: Scaling down to {{$PHASE1_NODE_COUNT}} pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 1
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: configmap
+      objectTemplatePath: configmap.yaml
+    - basename: deployment
+      objectTemplatePath: deployment-dynamic.yaml
+      templateFillMap:
+        Replicas: {{$PHASE1_NODE_COUNT}}
+        CpuRequest: {{$NODE_FREE_CPU}}
+        MemoryRequest: {{$NODE_FREE_RAM}}
+- name: Waiting for nodes and pods to be scaled down
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $PHASE1_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $PHASE1_NODE_COUNT $SCALE_DOWN_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+
+- name: Deleting deployments, configmaps
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: 0
+    tuningSet: QpsTuningSet
+    objectBundle:
+    - basename: deployment
+      objectTemplatePath: deployment-dynamic.yaml
+    - basename: configmap
+      objectTemplatePath: configmap.yaml
+- name: Waiting for pods/nodes to be deleted
+  measurements:
+  - Identifier: WaitForRunningDeployments
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+  - Identifier: WaitForNodes
+    Method: WaitForNodes
+    Params:
+      minDesiredNodeCount: {{SubtractInt $MIN_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      maxDesiredNodeCount: {{AddInt $MIN_NODE_COUNT $NODE_COUNT_ERROR_MARGIN}}
+      timeout: {{$OPERATION_TIMEOUT}}
+
+- name: Collecting measurements
+  measurements:
+  - Identifier: APIResponsivenessPrometheusSimple
+    Method: APIResponsivenessPrometheus
+    Params:
+      action: gather
+      enableViolations: true
+      useSimpleLatencyQuery: true
+      allowedSlowCalls: {{$ALLOWED_SLOW_API_CALLS}}
+      customThresholds: {{YamlQuote $CUSTOM_API_CALL_THRESHOLDS 4}}
+  - Identifier: InClusterNetworkLatency
+    Method: InClusterNetworkLatency
+    Params:
+      action: gather
+  - Identifier: DnsLookupLatency
+    Method: DnsLookupLatency
+    Params:
+      action: gather
+  {{if $ENABLE_CONTAINER_RESTARTS_MEASUREMENT}}
+  - Identifier: ContainerRestarts
+    Method: ContainerRestarts
+    Params:
+      action: gather
+      enableViolations: true
+      defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+      customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+  {{end}}
+  - Identifier: TestMetrics
+    Method: TestMetrics
+    Params:
+      action: gather
+      systemPodMetricsEnabled: true
+      clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+      restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+      enableRestartCountCheck: true
+{{if $ENABLE_API_AVAILABILITY_MEASUREMENT}}
+  - Identifier: APIAvailability
+    Method: APIAvailability
+    Params:
+      action: gather
+{{end}}

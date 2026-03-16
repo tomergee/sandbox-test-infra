@@ -1,0 +1,126 @@
+#Constants
+# Cater for the case where the number of nodes is less than nodes per namespace. See https://github.com/kubernetes/perf-tests/issues/887
+{{$NODES_PER_NAMESPACE := MinInt .Nodes (DefaultParam .NODES_PER_NAMESPACE 100)}}
+
+
+{{$STATEFUL_SET_SIZE := DefaultParam .STATEFUL_SET_SIZE 30}}
+{{$STATEFUL_SETS_PER_NAMESPACE := DefaultParam .STATEFUL_SETS_PER_NAMESPACE 1}}
+
+
+{{$DEPLOYMENT_SIZE := DefaultParam .CL2_DEPLOYMENT_SIZE 30}}
+{{$DEPLOYMENT_PER_NAMESPACE := DefaultParam .DEPLOYMENT_PER_NAMESPACE 1}}
+{{$PRE_TEST_DEPLOYMENT_SIZE := DefaultParam .PRE_TEST_DEPLOYMENT_SIZE 0}}
+{{$PRE_TEST_DEPLOYMENTS_PER_NAMESPACE := DefaultParam .PRE_TEST_DEPLOYMENTS_PER_NAMESPACE 0}}
+{{$NEEDS_PRE_POPULATED_VOLUME := DefaultParam .NEEDS_PRE_POPULATED_VOLUME false}}
+{{$NEEDS_PARALLELSTORE_CLEANUP := DefaultParam .NEEDS_PARALLELSTORE_CLEANUP false}}
+{{$NEEDS_LUSTRE_CLEANUP := DefaultParam .NEEDS_LUSTRE_CLEANUP false}}
+
+# Networking parameters
+{{$NEEDS_VPC_PEERING := DefaultParam .NEEDS_VPC_PEERING false}}
+{{$NETWORK_NAME := DefaultParam .NETWORK_NAME "gke-storage-network"}}
+{{$FIREWALL_RULE_NAME := DefaultParam .FIREWALL_RULE_NAME "gke-storage-firewall-rule"}}
+{{$IP_RANGE_NAME := DefaultParam .IP_RANGE_NAME "gke-storage-ip-range"}}
+
+# Variables
+{{$namespaces := DefaultParam .NAMESPACES 1}}
+
+
+name: load
+namespace:
+  number: {{$namespaces}}
+tuningSets:
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+
+# TODO(https://github.com/kubernetes/perf-tests/issues/1024): This TuningSet is used only for pod-startup-latency, get rid of it
+# Uniform5qps: for each running phase, use 5 qps.
+- name: Uniform5qps
+  qpsLoad:
+    qps: 5
+# Global100qps: use 100 qps globally:
+# * split equally qps among all running phases
+# * if some phase finishes, other phases will get more qps.
+- name: Global100qps
+  globalQPSLoad:
+    qps: 100
+    burst: 1
+
+steps:
+{{if $NEEDS_VPC_PEERING}}
+- module:
+    path: /modules/networking.yaml
+    params:
+      actionName: "create"
+      networkName: {{$NETWORK_NAME}}
+      firewallRuleName: {{$FIREWALL_RULE_NAME}}
+      ipRangeName: {{$IP_RANGE_NAME}}
+{{end}}
+
+{{if $NEEDS_PRE_POPULATED_VOLUME}}
+- module:
+    path: /modules/pre-test.yaml
+    params:
+      actionName: "create"
+      namespaces: {{$namespaces}}
+      tuningSet: Uniform5qps
+      preTestDeploymentSize: {{$PRE_TEST_DEPLOYMENT_SIZE}}
+      preTestDeploymentsPerNamespace: {{$PRE_TEST_DEPLOYMENTS_PER_NAMESPACE}}
+{{end}}
+
+- module:
+    path: /modules/measurements.yaml
+    params:
+      action: start
+
+- module:
+    path: /modules/reconcile-objects.yaml
+    params:
+      actionName: "create"
+      namespaces: {{$namespaces}}
+      tuningSet: Uniform5qps
+      statefulSetSize: {{$STATEFUL_SET_SIZE}}
+      statefulSetsPerNamespace: {{$STATEFUL_SETS_PER_NAMESPACE}}
+      deploymentSize: {{$DEPLOYMENT_SIZE}}
+      deploymentsPerNamespace: {{$DEPLOYMENT_PER_NAMESPACE}}
+
+- module:
+    path: /modules/reconcile-objects.yaml
+    params:
+      actionName: "delete"
+      namespaces: {{$namespaces}}
+      tuningSet: Uniform5qps
+      statefulSetSize: {{$STATEFUL_SET_SIZE}}
+      statefulSetsPerNamespace: 0
+      pvStatefulSetSize: {{$STATEFUL_SETS_PER_NAMESPACE}}
+      deploymentSize: {{$DEPLOYMENT_SIZE}}
+      deploymentsPerNamespace: 0
+
+
+- module:
+    path: /modules/measurements.yaml
+    params:
+      action: gather
+
+{{if $NEEDS_PRE_POPULATED_VOLUME}}
+- module:
+    path: /modules/pre-test.yaml
+    params:
+      actionName: "delete"
+      namespaces: {{$namespaces}}
+      tuningSet: Uniform5qps
+      preTestDeploymentSize: {{$PRE_TEST_DEPLOYMENT_SIZE}}
+      preTestDeploymentsPerNamespace: 0
+{{end}}
+
+{{if $NEEDS_VPC_PEERING}}
+- module:
+    path: /modules/networking.yaml
+    params:
+      actionName: "delete"
+      networkName: {{$NETWORK_NAME}}
+      firewallRuleName: {{$FIREWALL_RULE_NAME}}
+      ipRangeName: {{$IP_RANGE_NAME}}
+      needsParallelstoreCleanup: {{$NEEDS_PARALLELSTORE_CLEANUP}}
+      needsLustreCleanup: {{$NEEDS_LUSTRE_CLEANUP}}
+{{end}}

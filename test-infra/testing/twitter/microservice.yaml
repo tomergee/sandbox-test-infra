@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    app: {{.Name}}
+    group: services
+spec:
+  replicas: {{.InstanceCount}}
+  selector:
+    matchLabels:
+      app: {{.Name}}
+  template:
+    metadata:
+      labels:
+        app: {{.Name}}
+    spec:
+      containers:
+      - name: {{.Name}}
+        image: k8s.gcr.io/pause:3.1
+        env:
+        - name: REVISION
+          # The intended usage is as follows:
+          # To create all deployments with "not updated" flag set, UpdatedReplica to 0.
+          # To change env for first X deployments, set UpdatedReplica to X.
+          #
+          # Use AddInt 0 to cast .UpdatedReplicas (float64) to int as .Index.
+          {{if (lt .Index (AddInt 0 .UpdatedReplicas))}}
+          value: updated
+          {{else}}
+          value: "not updated"
+          {{end}}
+        resources:
+          requests:
+            cpu: {{.Cores}}
+            memory: 10Mi
+        volumeMounts:
+        {{range .Secrets}}
+          - name: secret-{{.}}
+            mountPath: /etc/secret-{{.}}
+        {{end}}
+      volumes:
+        {{range .Secrets}}
+          - name: secret-{{.}}
+            secret:
+              secretName: secret-{{.}}
+        {{end}}
+      automountServiceAccountToken: false
+      # Add not-ready/unreachable tolerations for 15 minutes so that node
+      # failure doesn't trigger pod deletion.
+      tolerations:
+        - key: "node.kubernetes.io/not-ready"
+          operator: "Exists"
+          effect: "NoExecute"
+          tolerationSeconds: 900
+        - key: "node.kubernetes.io/unreachable"
+          operator: "Exists"
+          effect: "NoExecute"
+          tolerationSeconds: 900

@@ -1,0 +1,19 @@
+BACKUP_TIMEOUT: "4h"
+EXECUTE_RESTORE: false # Restore located in us-west1 won't work with cluster in us-central1
+
+NAMESPACES: 10
+SMALL_CONFIG_MAP_COUNT: 10000
+SMALL_SECRET_COUNT: 10000
+
+# This override is for cluster with 5k nodes, each DaemonSet has 5k replicas.
+# It contains 16k Pods per namespace:
+# - 2k Jobs (no parallel) = 2K Pods.
+# - 2 DaemonSets (1k replicas for each) = 10k Pods.
+# - 40 Deployments (100 replicas for each) = 4k Pods.
+
+JOBS_PER_NAMESPACE: 2000
+DAEMON_SETS_PER_NAMESPACE: 2
+DEPLOYMENTS_PER_NAMESPACE: 40
+DEPLOYMENT_SIZE: 100
+
+HAS_VOLUMES: false

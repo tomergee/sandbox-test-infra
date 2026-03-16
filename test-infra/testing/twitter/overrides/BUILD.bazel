@@ -1,0 +1,45 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["main.go"],
+    importpath = "gke-internal.googlesource.com/test-infra/perf-tests/testing/twitter/overrides",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//perf-tests/testing/twitter/overrides/cronjobs:go_default_library",
+        "//perf-tests/testing/twitter/overrides/microservices:go_default_library",
+        "//perf-tests/testing/twitter/overrides/namespaces:go_default_library",
+        "//perf-tests/testing/twitter/overrides/secrets:go_default_library",
+        "//perf-tests/testing/twitter/overrides/statefulsets:go_default_library",
+        "//perf-tests/testing/twitter/overrides/updates:go_default_library",
+        "@in_gopkg_yaml_v2//:go_default_library",
+    ],
+)
+
+go_binary(
+    name = "overrides",
+    embed = [":go_default_library"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "package-srcs",
+    srcs = glob(["**"]),
+    tags = ["automanaged"],
+    visibility = ["//visibility:private"],
+)
+
+filegroup(
+    name = "all-srcs",
+    srcs = [
+        ":package-srcs",
+        "//perf-tests/testing/twitter/overrides/cronjobs:all-srcs",
+        "//perf-tests/testing/twitter/overrides/microservices:all-srcs",
+        "//perf-tests/testing/twitter/overrides/namespaces:all-srcs",
+        "//perf-tests/testing/twitter/overrides/secrets:all-srcs",
+        "//perf-tests/testing/twitter/overrides/statefulsets:all-srcs",
+        "//perf-tests/testing/twitter/overrides/updates:all-srcs",
+    ],
+    tags = ["automanaged"],
+    visibility = ["//visibility:public"],
+)

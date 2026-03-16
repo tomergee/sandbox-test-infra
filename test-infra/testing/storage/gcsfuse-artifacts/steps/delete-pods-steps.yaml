@@ -1,0 +1,41 @@
+## Input params
+{{$namespaces := .namespaces}}
+{{$tuningSet := .tuningSet}}
+
+# Deployments
+{{$deploymentSize := .deploymentSize}}
+{{$deploymentsPerNamespace := .deploymentsPerNamespace}}
+
+
+# GCS Fuse related parameters
+{{$GCS_FUSE_BUCKET_NAME := DefaultParam .CL2_GCS_FUSE_BUCKET_NAME "var CL2_GCS_FUSE_BUCKET_NAME was not supplied"}}
+{{$GCS_FUSE_ENABLE_METADATA_PREFETCH := DefaultParam .CL2_GCS_FUSE_ENABLE_METADATA_PREFETCH "false"}}
+{{$GCS_FUSE_DISABLE_METRICS := DefaultParam .CL2_GCS_FUSE_DISABLE_METRICS "true"}}
+{{$GCS_FUSE_SKIP_BUCKET_CHECK := DefaultParam .CL2_GCS_FUSE_SKIP_BUCKET_CHECK "false"}}
+
+steps:
+- name: delete objects
+  phases:
+  - namespaceRange:
+      Min: 1
+      Max: 1
+      basename: "gcsfuse-scale-test"
+    ReplicasPerNamespace: {{$deploymentsPerNamespace}}
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+    - basename: small-deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$deploymentSize}}
+        group: load
+        BUCKET_NAME: {{$GCS_FUSE_BUCKET_NAME}}
+        GCS_FUSE_DISABLE_METRICS: {{$GCS_FUSE_DISABLE_METRICS}}
+        GCS_FUSE_SKIP_BUCKET_CHECK: {{$GCS_FUSE_SKIP_BUCKET_CHECK}}
+        GCS_FUSE_ENABLE_METADATA_PREFETCH: {{$GCS_FUSE_ENABLE_METADATA_PREFETCH}}
+- name: Waiting for 'delete objects' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+      Params:
+        action: gather

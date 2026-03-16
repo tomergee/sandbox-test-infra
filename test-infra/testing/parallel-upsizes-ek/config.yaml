@@ -1,0 +1,136 @@
+# Test parameters.
+{{$NAMESPACES := DefaultParam .CL2_NAMESPACES 1}}
+
+# Sleep time for manual configuration of the cluster, to ssh and update manifest if needed
+{{$SLEEP_FOR_MANUAL_CONFIG := DefaultParam .CL2_SLEEP_FOR_MANUAL_CONFIG "0m"}}
+
+# Creating 5,000 pods in batches of 200 with podAntiAffinity to trigger scaleup of 5k nodes
+# with 2 minute wait between each batch to allow downsize for the nodes
+# Important Note: downsize-config should be set to an appropriate value at the job config
+# to allow downsize of nodes withing 2 minutes, otherwise the test will fail
+{{$PODS_BATCH_SIZE := DefaultParam .CL2_PODS_BATCH_SIZE 200}}
+{{$TOTAL_BATCHES_NUMBER := DefaultParam .CL2_TOTAL_BATCHES_NUMBER 25}}  # 25 * 200 = 5000 pods
+{{$BATCH_MEASUREMENT_TIMEOUT := DefaultParam .CL2_BATCH_MEASUREMENT_TIMEOUT "10m"}}
+{{$BATCH_WAIT_DURATION := DefaultParam .CL2_BATCH_WAIT_DURATION "2m"}}
+
+# Create 5,000 pods after setting-up the nodes to trigger scaleup of 5k nodes
+{{$WAIT_BEFORE_UPSIZE := DefaultParam .CL2_WAIT_BEFORE_UPSIZE "10m"}}
+{{$UPSIZE_PODS_COUNT := DefaultParam .CL2_UPSIZE_PODS_COUNT 5000}}
+{{$UPSIZE_MEASUREMENT_TIMEOUT := DefaultParam .CL2_UPSIZE_MEASUREMENT_TIMEOUT "10m"}}
+{{$UPSIZE_THRESHOLD := DefaultParam .CL2_UPSIZE_THRESHOLD "10m"}}
+{{$UPSIZE_PERC50_THRESHOLD := DefaultParam .CL2_UPSIZE_PERC50_THRESHOLD "40s"}}
+{{$UPSIZE_PERC90_THRESHOLD := DefaultParam .CL2_UPSIZE_PERC90_THRESHOLD "4m"}}
+
+name: ek-parallel-upsizes
+namespace:
+  number: {{$NAMESPACES}}
+tuningSets:
+- name: default
+  globalQPSLoad:
+    qps: 100
+    burst: 1
+
+steps:
+- name: Waiting for {{$SLEEP_FOR_MANUAL_CONFIG}} before starting the test to allow manual configuration if needed
+  measurements:
+  - Identifier: WaitForManualConfig
+    Method: Sleep
+    Params:
+      duration: {{$SLEEP_FOR_MANUAL_CONFIG}}
+# Creating 5,000 pods in batches of 200 with 2 minute wait between each batch with podAntiAffinity to trigger scaleup of 5k nodes
+{{range $batch := Loop $TOTAL_BATCHES_NUMBER }}
+- name: Starting measurement for batch {{AddInt 1 $batch}}
+  measurements:
+  - Identifier: WaitForRunningBatch{{AddInt 1 $batch}}
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = scale-deployment
+      operationTimeout: {{$BATCH_MEASUREMENT_TIMEOUT}}
+      checkIfPodsAreUpdated: false
+
+- name: Creating batch {{AddInt 1 $batch}} of pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$NAMESPACES}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: scale-test-{{AddInt 1 $batch}}
+      objectTemplatePath: scale-deployment.yaml
+      templateFillMap:
+        Replicas: {{$PODS_BATCH_SIZE}}
+
+- name: Waiting for batch {{AddInt 1 $batch}} to be running
+  measurements:
+  - Identifier: WaitForRunningBatch{{AddInt 1 $batch}}
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Waiting for {{$BATCH_WAIT_DURATION}} before creating next batch to allow downsize
+  measurements:
+  - Identifier: WaitBetweenBatches{{AddInt 1 $batch}}
+    Method: Sleep
+    Params:
+      duration: {{$BATCH_WAIT_DURATION}}
+{{end}}
+
+# Wait 10 mins after the last batch to make sure if any extra node is processing is scaled-down
+- name: Waiting for {{$WAIT_BEFORE_UPSIZE}} before starting upsize to allow scale down extra nodes
+  measurements:
+  - Identifier: WaitBeforeUpsize
+    Method: Sleep
+    Params:
+      duration: {{$WAIT_BEFORE_UPSIZE}}
+
+- name: Starting measurements for upsizing
+  measurements:
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = upsize-test
+      perc50Threshold: {{$UPSIZE_PERC50_THRESHOLD}}
+      perc90Threshold: {{$UPSIZE_PERC90_THRESHOLD}}
+      threshold: {{$UPSIZE_THRESHOLD}}
+  - Identifier: WaitForControlledPodsRunning
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      apiVersion: apps/v1
+      kind: Deployment
+      labelSelector: group = upsize-deployment
+      operationTimeout: {{$UPSIZE_MEASUREMENT_TIMEOUT}}
+      checkIfPodsAreUpdated: false
+
+# Step to create the additional UPSIZE_PODS_COUNT pods without node affinity (1 CPU, 4 GB memory) to test upsize
+- name: Creating {{$UPSIZE_PODS_COUNT}} additional pods (1 CPU, 4GB, no node affinity)
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$NAMESPACES}}
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: upsize-test
+      objectTemplatePath: upsize-deployment.yaml
+      templateFillMap:
+        Replicas: {{$UPSIZE_PODS_COUNT}}
+
+- name: Waiting for {{$UPSIZE_PODS_COUNT}} additional pods to be scheduled
+  measurements:
+  - Identifier: WaitForControlledPodsRunning
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Measure pod startup latency
+  measurements:
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather

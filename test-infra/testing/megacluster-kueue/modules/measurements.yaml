@@ -1,0 +1,84 @@
+# ==============================================================================
+# ClusterLoader2 Measurements Module
+#
+# This module defines a reusable set of standard measurements often applied
+# during different phases of a performance test (e.g., at the beginning and end).
+# It measures API responsiveness, availability, container restarts, and gathers
+# various system/test metrics.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Input Parameters
+# ------------------------------------------------------------------------------
+{{$action := .action}}                  # Controls whether to start or gather the measurements. Valid values: "start", "gather".
+
+# ------------------------------------------------------------------------------
+# Configuration & Feature Gates (Passed from Test Config)
+# These parameters control the behavior and thresholds of the measurements.
+# They are typically set globally in the main ClusterLoader2 test configuration.
+# ------------------------------------------------------------------------------
+{{$ALLOWED_SLOW_API_CALLS := DefaultParam .CL2_ALLOWED_SLOW_API_CALLS 0}} # Max number of API calls allowed to exceed the latency threshold.
+{{$API_AVAILABILITY_PERCENTAGE_THRESHOLD := DefaultParam .CL2_API_AVAILABILITY_PERCENTAGE_THRESHOLD 99.5}} # Minimum required API server availability percentage.
+{{$CLUSTER_OOMS_IGNORED_PROCESSES := DefaultParam .CL2_CLUSTER_OOMS_IGNORED_PROCESSES ""}} # Comma-separated list of process names to ignore when tracking cluster OOMs.
+{{$CUSTOM_API_CALL_THRESHOLDS := DefaultParam .CUSTOM_API_CALL_THRESHOLDS ""}} # YAML string defining custom latency thresholds for specific API calls (resource/verb).
+{{$ENABLE_CLUSTER_OOMS_TRACKER := DefaultParam .CL2_ENABLE_CLUSTER_OOMS_TRACKER true}} # If true, track Out-Of-Memory events in the cluster.
+{{$ENABLE_RESTART_COUNT_CHECK := DefaultParam .ENABLE_RESTART_COUNT_CHECK true}} # If true, check for excessive container restarts.
+{{$ENABLE_SYSTEM_POD_METRICS:= DefaultParam .ENABLE_SYSTEM_POD_METRICS true}} # If true, collect metrics from system pods (e.g., kube-system).
+{{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE := DefaultParam .CL2_ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE true}} # If true, generate violations if API responsiveness thresholds are breached.
+{{$ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_ALLOWED_CONTAINER_RESTARTS 1}} # Default maximum allowed container restarts per container.
+{{$CUSTOM_ALLOWED_CONTAINER_RESTARTS := DefaultParam .CL2_CUSTOM_ALLOWED_CONTAINER_RESTARTS ""}} # YAML string defining custom restart limits for specific containers/pods.
+{{$NODE_LOCAL_DNS_LATENCY_THRESHOLD := DefaultParam .CL2_NODE_LOCAL_DNS_LATENCY_THRESHOLD "5s"}} # Latency threshold for NodeLocal DNS queries (used within TestMetrics potentially).
+{{$RESTART_COUNT_THRESHOLD_OVERRIDES:= DefaultParam .RESTART_COUNT_THRESHOLD_OVERRIDES ""}} # DEPRECATED? Similar to CUSTOM_ALLOWED_CONTAINER_RESTARTS, check CL2 docs.
+{{$MEASURE_API_RESPONSIVENESS := DefaultParam .CL2_MEASURE_API_RESPONSIVENESS false}}
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+- name: "{{$action}} common test measurements" # Step name reflects the action (start/gather)
+  measurements:
+    {{if $MEASURE_API_RESPONSIVENESS}}
+    # Measures API call latency using Prometheus metrics (simple version).
+    - Identifier: APIResponsivenessPrometheusSimple
+      Method: APIResponsivenessPrometheus
+      Params:
+        action: {{$action}}
+        enableViolations: {{$ENABLE_VIOLATIONS_FOR_API_CALL_PROMETHEUS_SIMPLE}}
+        useSimpleLatencyQuery: true # Uses a less resource-intensive query.
+        summaryName: APIResponsivenessPrometheus_simple # Name for the summary output.
+        allowedSlowCalls: {{$ALLOWED_SLOW_API_CALLS}}
+        # Use YamlQuote for parameters that might contain complex YAML/string structures.
+        customThresholds: {{YamlQuote $CUSTOM_API_CALL_THRESHOLDS 4}}
+    {{end}}
+    # Measures the availability of the Kubernetes API server.
+    - Identifier: APIAvailability
+      Method: APIAvailability
+      Params:
+        action: {{$action}}
+        pollFrequency: "5s" # How often to check API server health.
+        hostPollTimeoutSeconds: 5 # Timeout for individual health checks.
+        useHostInternalIPs: false # Whether to use internal IPs for checking (usually false).
+        threshold: {{$API_AVAILABILITY_PERCENTAGE_THRESHOLD}}
+
+    # Tracks and reports container restarts across the cluster.
+    - Identifier: ContainerRestarts
+      Method: ContainerRestarts
+      Params:
+        action: {{$action}}
+        enableViolations: true # Report violations if restart counts exceed thresholds.
+        defaultAllowedRestarts: {{$ALLOWED_CONTAINER_RESTARTS}}
+        customAllowedRestarts: {{YamlQuote $CUSTOM_ALLOWED_CONTAINER_RESTARTS 4}}
+
+    # Gathers various test-level metrics, including system pod metrics, OOM events,
+    # and potentially other checks like DNS latency (depending on implementation).
+    - Identifier: TestMetrics
+      Method: TestMetrics
+      Params:
+        action: {{$action}}
+        systemPodMetricsEnabled: {{$ENABLE_SYSTEM_POD_METRICS}}
+        clusterOOMsIgnoredProcesses: {{YamlQuote $CLUSTER_OOMS_IGNORED_PROCESSES 4}}
+        clusterOOMsTrackerEnabled: {{$ENABLE_CLUSTER_OOMS_TRACKER}}
+        # Check if RESTART_COUNT_THRESHOLD_OVERRIDES is still used or replaced by customAllowedRestarts
+        restartCountThresholdOverrides: {{YamlQuote $RESTART_COUNT_THRESHOLD_OVERRIDES 4}}
+        enableRestartCountCheck: {{$ENABLE_RESTART_COUNT_CHECK}}
+        # Note: NODE_LOCAL_DNS_LATENCY_THRESHOLD might be used internally by TestMetrics
+        # or require a separate measurement depending on the CL2 version/setup.

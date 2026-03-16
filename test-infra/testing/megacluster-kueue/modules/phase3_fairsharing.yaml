@@ -1,0 +1,862 @@
+# ==============================================================================
+# ClusterLoader2 Fair Sharing Test Module
+#
+# This module defines steps to test Kueue's Fair Sharing features within a cohort.
+# It involves two "teams" (Alpha and Beta), each with their own namespace and
+# ClusterQueue configured with weights, sharing resources from a common buffer queue.
+# The test runs workloads for both teams and observes scheduling based on weights
+# and preemption behavior.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Input Parameters & Calculated Variables
+# ------------------------------------------------------------------------------
+
+# --- Shared Configuration ---
+{{$NamespaceTeamAlpha := .NamespaceTeamAlpha}}       # Base name for Team Alpha's namespace.
+{{$NamespaceTeamBeta := .NamespaceTeamBeta}}         # Base name for Team Beta's namespace.
+
+{{$Multiplier := .CL2_MULTIPLIER}}                   # General scaling factor.
+{{$BIND_PORT := DefaultParam .CL2_BIND_PORT false}}     # Whether workloads bind host ports.
+{{$CpuRequest := DefaultParam .CL2_CPU_REQUEST "0.3"}} # Base CPU request per pod.
+{{$SleepDuration := DefaultParam .CL2_SLEEP_DURATION "120s"}} # Default sleep duration between steps.
+
+# --- Fair Sharing & Queue Configuration ---
+{{$WeightAlpha := DefaultParam .CL2_FAIR_SHARING_WEIGHT_ALPHA 3}} # Fair sharing weight for Team Alpha.
+{{$WeightBeta := DefaultParam .CL2_FAIR_SHARING_WEIGHT_BETA 1}}  # Fair sharing weight for Team Beta.
+
+# Total nominal quota available in the buffer queue (shared pool).
+# 10 is a constant used to calculate total number of pods, where # Pods = Multiplier * 10
+{{$NOMINAL_QUOTA := MultiplyFloat $Multiplier $CpuRequest 10}}
+
+# --- Part 1 Configuration (Fair sharing based on weights) ---
+{{$SkipPart1 := false}}                             # Set to true to skip the first part of the test.
+
+{{$NumWorkloads := DivideInt $Multiplier 10}}       # Number of Job objects per team in Part 1.
+{{$WorkloadSize := 100}}                            # Pods per Job in Part 1.
+
+{{if lt $Multiplier 10}}
+{{$NumWorkloads := $Multiplier}}                    # Number of Job objects per team in Part 1.
+{{$WorkloadSize := 10}}                             # Pods per Job in Part 1.
+{{end}}
+# Expected running pods for Beta team based on fair sharing weights.
+# Formula: TotalPods * (BetaWeight / (AlphaWeight + BetaWeight))
+{{$ExpectedRunningBetaWorkloads := Ceil (MultiplyInt $WorkloadSize (DivideInt (MultiplyFloat $NumWorkloads $WeightBeta) (AddInt $WeightAlpha $WeightBeta)))}}
+
+# --- Part 2 Configuration (Fair sharing with nominal quota + borrowing) ---
+# Initial nominal quota assigned directly to each team's ClusterQueue in Part 2.
+{{$InitialCQQuota := DefaultParam .CL2_InitialCQQuota (MultiplyFloat 2 $Multiplier $CpuRequest)}}
+# Workload sizes (pods per Job) for Part 2.
+{{$AlphaLargeWorkloadSize := MultiplyInt 5 $Multiplier}}
+{{$AlphaMediumWorkloadSize := MultiplyInt 3 $Multiplier}}
+{{$AlphaSmallWorkloadSize := MultiplyInt 2 $Multiplier}}
+{{$BetaLargeWorkloadSize := MultiplyInt 3 $Multiplier}}
+{{$BetaMediumWorkloadSize := MultiplyInt 2 $Multiplier}}
+{{$BetaSmallWorkloadSize := MultiplyInt 1 $Multiplier}}
+
+# --- Priority Classes (Passed into this module) ---
+{{$priorityClassHigh := .priorityClassHigh}}
+{{$priorityClassMedium := .priorityClassMedium}}
+{{$priorityClassLow := .priorityClassLow}}
+
+# --- Measurement Configuration ---
+{{$ThroughputThreshold := DefaultParam .ThroughputThreshold 100}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{if lt $Multiplier 500}}
+{{$ThroughputThreshold = DefaultParam .ThroughputThreshold -1}} # The scheduling is done pretty quickly under 30 sec, making calculation of throughput unstable, -1 measures it but doesn't disable it
+{{end}}
+{{$PodStartupLatencyThreshold := DefaultParam .PodStartupLatencyThreshold "1m"}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+
+# ------------------------------------------------------------------------------
+# Phase 3: Initialization and Setup
+# ------------------------------------------------------------------------------
+
+- name: "Phase 3 - Init 0: Create Namespaces for Team Alpha and Team Beta"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$NamespaceTeamAlpha}}
+        objectTemplatePath: common/namespace.yaml
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$NamespaceTeamBeta}}
+        objectTemplatePath: common/namespace.yaml
+
+# ------------------------------------------------------------------------------
+# Phase 3 - Part 1: Fair Sharing Test (Weights Only, No Nominal Quota)
+# ------------------------------------------------------------------------------
+{{if not $SkipPart1}} # Conditionally execute Part 1
+
+- name: "Phase 3 - Part 1 - Init 1: Create ClusterQueues for Fair Sharing (Part 1) with Buffer nominal quota of {{$NOMINAL_QUOTA}}"
+  phases:
+  - namespaceList: [""] # ClusterQueues are cluster-scoped.
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    # Team Alpha CQ: No nominal quota, relies on fair sharing from cohort.
+    - basename: fairsharing-alpha-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamAlpha}}-0"
+        NominalQuota: 0
+        FairSharingWeight: {{$WeightAlpha}}
+        Preemption: true
+        Cohort: research-cohort # Assign to the shared cohort.
+    # Team Beta CQ: No nominal quota, relies on fair sharing from cohort.
+    - basename: fairsharing-beta-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamBeta}}-0"
+        NominalQuota: 0
+        FairSharingWeight: {{$WeightBeta}}
+        Preemption: true
+        Cohort: research-cohort # Assign to the shared cohort.
+    # Buffer CQ: Holds the actual resources, no weight (doesn't compete).
+    - basename: fairsharing-buffer-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "" # No specific namespace association needed.
+        NominalQuota: {{$NOMINAL_QUOTA}} # Holds the total quota for the cohort.
+        FairSharingWeight: 0
+        Preemption: false # Buffer doesn't preempt.
+        Cohort: research-cohort # Assign to the shared cohort.
+
+- name: "Phase 3 - Part 1 - Init 2: Create LocalQueues (Part 1)"
+  phases:
+  - namespaceList:
+    - "{{$NamespaceTeamAlpha}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: fairsharing-alpha-lq
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamAlpha}}-0"
+        ClusterQueue: fairsharing-alpha-cq-0
+  - namespaceList:
+    - "{{$NamespaceTeamBeta}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: fairsharing-beta-lq
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamBeta}}-0"
+        ClusterQueue: fairsharing-beta-cq-0
+
+
+- name: "Phase 3 - Part 1 - Step 1: Run Alpha Team Low Priority Jobs ({{$NumWorkloads}} Jobs)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Low Priority Jobs"
+      StepId: AlphaTeamLowPriorityJobs
+      Group: alpha-team-low
+      WorkloadName: batch-job-alpha-team-low
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 1; Step 1"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$WorkloadSize}}
+      Replicas: {{$NumWorkloads}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep workloads for fair sharing observation.
+      DesiredRunningPods: {{MultiplyInt $NumWorkloads $WorkloadSize}} # Initially expect all if no contention.
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+      create: true
+
+- name: "Phase 3 - Part 1 - Step 2: Run Alpha Team Medium Priority Jobs ({{$NumWorkloads}} Jobs)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Medium Priority Jobs"
+      StepId: AlphaTeamMediumPriorityJobs
+      Group: alpha-team-medium
+      WorkloadName: batch-job-alpha-team-medium
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 1; Step 2"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$WorkloadSize}}
+      Replicas: {{$NumWorkloads}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}  # Medium priority will preempt Alpha's low priority workloads.
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep workloads.
+      DesiredRunningPods: {{MultiplyInt $NumWorkloads $WorkloadSize}} # Initially expect all.
+      WaitForControlledPodsRunning: false
+      Timeout: "20m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+      create: true
+
+- name: "Phase 3 - Part 1 - Step 3: Run Beta Team High Priority Jobs ({{$NumWorkloads}} Jobs, Expect ~{{$ExpectedRunningBetaWorkloads}} Pods)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team High Priority Jobs (Expected Running {{$ExpectedRunningBetaWorkloads}})"
+      StepId: BetaTeamHighPriorityJobs
+      Group: beta-team-high
+      WorkloadName: batch-job-beta-team-high
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 1; Step 3"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$WorkloadSize}}
+      Replicas: {{$NumWorkloads}}
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassHigh}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: true # Delete Beta's jobs after observation.
+      DesiredRunningPods: {{$ExpectedRunningBetaWorkloads}} # Wait for the calculated fair share.
+      WaitForControlledPodsRunning: false
+      Timeout: "10m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+      create: true
+
+# --- Cleanup Alpha Team Jobs from Part 1 ---
+- name: "Phase 3 - Part 1 - Cleanup Alpha Low Prio Jobs"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Low Priority Jobs Cleanup"
+      StepId: AlphaTeamLowPriorityJobsCleanup
+      Group: alpha-team-low
+      WorkloadName: batch-job-alpha-team-low
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 1; Step Cleanup Alpha Low"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$WorkloadSize}}
+      Replicas: 0 # Set replicas to 0 for deletion.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassLow}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false # Skip creation.
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+
+- name: "Phase 3 - Part 1 - Cleanup Alpha Medium Prio Jobs"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Medium Priority Jobs Cleanup"
+      StepId: AlphaTeamMediumPriorityJobsCleanup
+      Group: alpha-team-medium
+      WorkloadName: batch-job-alpha-team-medium
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 1; Step Cleanup Alpha Med"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$WorkloadSize}}
+      Replicas: 0 # Set replicas to 0 for deletion.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false # Skip creation.
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      Timeout: "30m"
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+
+{{end}} # End of 'if not $SkipPart1'
+
+# ------------------------------------------------------------------------------
+# Phase 3 - Part 2: Fair Sharing Test (Nominal Quota + Borrowing)
+# ------------------------------------------------------------------------------
+
+- name: "Phase 3 - Part 2 - Init 1: Update ClusterQueues with Initial Nominal Quota {{$InitialCQQuota}} and total nominal quota {{$NOMINAL_QUOTA}}"
+  phases:
+  - namespaceList: [""] # ClusterQueues are cluster-scoped.
+    replicasPerNamespace: 1 # Update existing objects.
+    tuningSet: default
+    objectBundle:
+    # Update Alpha CQ with initial nominal quota.
+    - basename: fairsharing-alpha-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamAlpha}}-0"
+        NominalQuota: "{{$InitialCQQuota}}" # Assign initial quota.
+        FairSharingWeight: {{$WeightAlpha}}
+        Preemption: true
+        Cohort: research-cohort
+    # Update Beta CQ with initial nominal quota.
+    - basename: fairsharing-beta-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamBeta}}-0"
+        NominalQuota: "{{$InitialCQQuota}}" # Assign initial quota.
+        FairSharingWeight: {{$WeightBeta}}
+        Preemption: true
+        Cohort: research-cohort
+    # Update Buffer CQ with remaining quota.
+    - basename: fairsharing-buffer-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: ""
+        NominalQuota: "{{SubtractFloat $NOMINAL_QUOTA (MultiplyFloat $InitialCQQuota 2)}}" # Adjust buffer quota.
+        FairSharingWeight: 0
+        Preemption: false
+        Cohort: research-cohort
+
+# Recreate/Update LocalQueues to ensure they point to the potentially updated CQs (required if $SkipPart1 is true)
+- name: "Phase 3 - Part 2 - Init 2: Ensure LocalQueues are Configured (Part 2)"
+  phases:
+  - namespaceList:
+    - "{{$NamespaceTeamAlpha}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: fairsharing-alpha-lq
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamAlpha}}-0"
+        ClusterQueue: fairsharing-alpha-cq-0
+  - namespaceList:
+    - "{{$NamespaceTeamBeta}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: fairsharing-beta-lq
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamBeta}}-0"
+        ClusterQueue: fairsharing-beta-cq-0
+
+# --- Submit Alpha Team Workloads (Part 2) ---
+- name: "Phase 3 - Part 2 - Step 1: Run Alpha Team Large Job (Medium Prio)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Large Job"
+      StepId: AlphaTeamLargeJobs
+      Group: alpha-team-large-job
+      WorkloadName: batch-job-alpha-team-large-job
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Step 1"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$AlphaLargeWorkloadSize}}
+      Replicas: 1
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep for preemption observation.
+      DesiredRunningPods: {{$AlphaLargeWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+      create: true
+
+- name: "Phase 3 - Part 2 - Step 2: Run Alpha Team Medium Job (Medium Prio)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Medium Job"
+      StepId: AlphaTeamMediumJobs
+      Group: alpha-team-medium-job
+      WorkloadName: batch-job-alpha-team-medium-job
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Step 2"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$AlphaMediumWorkloadSize}}
+      Replicas: 1
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep for preemption observation.
+      DesiredRunningPods: {{$AlphaMediumWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+      create: true
+
+- name: "Phase 3 - Part 2 - Step 3: Run Alpha Team Small Job (Medium Prio)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Small Job"
+      StepId: AlphaTeamSmallJobs
+      Group: alpha-team-small-job
+      WorkloadName: batch-job-alpha-team-small-job
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Step 3"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$AlphaSmallWorkloadSize}}
+      Replicas: 1
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep for preemption observation.
+      DesiredRunningPods: {{$AlphaSmallWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+      create: true
+
+# --- Submit Beta Team Workloads (Part 2) to Induce Preemption ---
+- name: "Phase 3 - Part 2 - Step 4: Run Beta Team Small Job (Medium Prio)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team Small Job"
+      StepId: BetaTeamSmallJobs
+      Group: beta-team-small-job
+      WorkloadName: batch-job-beta-team-small-job
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Step 4"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BetaSmallWorkloadSize}}
+      Replicas: 1
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep running.
+      DesiredRunningPods: {{$BetaSmallWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+      create: true
+
+# --- Check Preemption ---
+- name: "Phase 3 - Part 2 - Step 5: Wait for Small Alpha Job to be Preempted (0 Pods Running)"
+  measurements:
+  - Method: WaitForRunningPods
+    Identifier: WaitForDesiredCountRunningSmallAlphaWorkloadPreemption
+    Params:
+      action: gather
+      timeout: "5m"
+      desiredPodCount: 0 # Expect small alpha job to be preempted by beta job.
+      labelSelector: group=alpha-team-small-job
+      namespace: "{{$NamespaceTeamAlpha}}-0"
+
+# --- Submit More Beta Workloads ---
+- name: "Phase 3 - Part 2 - Step 6: Run Beta Team Medium Job (Medium Prio)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team Medium Job"
+      StepId: BetaTeamMediumJobs
+      Group: beta-team-medium-job
+      WorkloadName: batch-job-beta-team-medium-job
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Step 6"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BetaMediumWorkloadSize}}
+      Replicas: 1
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: false # Keep running.
+      DesiredRunningPods: {{$BetaMediumWorkloadSize}}
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+      create: true
+
+# --- Check Recovery and Further Preemption ---
+- name: "Phase 3 - Part 2 - Step 7: Wait for Small Alpha Recovery & Medium Alpha Preemption"
+  measurements:
+    # Wait for the small alpha job to recover its pods.
+  - Method: WaitForRunningPods
+    Identifier: WaitForDesiredCountRunningSmallAlphaWorkloadRecovery
+    Params:
+      action: gather
+      timeout: "5m"
+      desiredPodCount: {{$AlphaSmallWorkloadSize}}
+      labelSelector: group=alpha-team-small-job
+      namespace: "{{$NamespaceTeamAlpha}}-0"
+    # Wait for the medium alpha job to be preempted (0 pods running).
+  - Method: WaitForRunningPods
+    Identifier: WaitForDesiredCountRunningMediumAlphaWorkloadPreemption
+    Params:
+      action: gather
+      timeout: "5m"
+      desiredPodCount: 0
+      labelSelector: group=alpha-team-medium-job
+      namespace: "{{$NamespaceTeamAlpha}}-0"
+
+# --- Submit Final Beta Workload (Shouldn't fully run due to quota limits) ---
+- name: "Phase 3 - Part 2 - Step 8: Run Beta Team Large Job (Medium Prio, Expect 0 Pods)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team Large Job (Shouldn't Get Scheduled)"
+      StepId: BetaTeamLargeJobs
+      Group: beta-team-large-job
+      WorkloadName: batch-job-beta-team-large-job
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Step 8"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BetaLargeWorkloadSize}}
+      Replicas: 1
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: {{$SleepDuration}}
+      BindPort: {{$BIND_PORT}}
+      delete: true # Clean up this job afterwards.
+      SleepAfterCreateDuration: "30s"
+      DesiredRunningPods: 0 # Expect 0 pods to run due to quota exhaustion.
+      WaitForControlledPodsRunning: false
+      Timeout: "5m"
+      ThroughputThreshold: 0 # Shouldn't get scheduled, so we shouldn't measure throughput
+      PodStartupLatencyThreshold: "" # Shouldn't get scheduled, so we shouldn't measure startup latency
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+      create: true
+
+# ------------------------------------------------------------------------------
+# Phase 3: Teardown
+# ------------------------------------------------------------------------------
+
+# --- Explicit Cleanup for Part 2 Workloads ---
+- name: "Phase 3 - Cleanup Alpha Large Job (Part 2)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Large Job Cleanup"
+      StepId: AlphaTeamLargeJobsCleanup
+      Group: alpha-team-large-job
+      WorkloadName: batch-job-alpha-team-large-job
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Cleanup Alpha Large"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$AlphaLargeWorkloadSize}}
+      Replicas: 0 # Set replicas to 0 for deletion.
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false # Skip creation.
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+
+- name: "Phase 3 - Cleanup Alpha Medium Job (Part 2)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Medium Job Cleanup"
+      StepId: AlphaTeamMediumJobsCleanup
+      Group: alpha-team-medium-job
+      WorkloadName: batch-job-alpha-team-medium-job
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Cleanup Alpha Medium"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$AlphaMediumWorkloadSize}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+
+- name: "Phase 3 - Cleanup Alpha Small Job (Part 2)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Alpha Team Small Job Cleanup"
+      StepId: AlphaTeamSmallJobsCleanup
+      Group: alpha-team-small-job
+      WorkloadName: batch-job-alpha-team-small-job
+      WorkloadType: alpha-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Cleanup Alpha Small"
+      Namespace: "{{$NamespaceTeamAlpha}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$AlphaSmallWorkloadSize}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-alpha-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamBeta}}-0"
+
+- name: "Phase 3 - Cleanup Beta Medium Job (Part 2)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team Medium Job Cleanup"
+      StepId: BetaTeamMediumJobsCleanup
+      Group: beta-team-medium-job
+      WorkloadName: batch-job-beta-team-medium-job
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Cleanup Beta Medium"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BetaMediumWorkloadSize}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+
+- name: "Phase 3 - Cleanup Beta Small Job (Part 2)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team Small Job Cleanup"
+      StepId: BetaTeamSmallJobsCleanup
+      Group: beta-team-small-job
+      WorkloadName: batch-job-beta-team-small-job
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Cleanup Beta Small"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BetaSmallWorkloadSize}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+
+# Note: Beta Large job from Part 2 (Step 8) already had delete: true,
+# but adding explicit cleanup is safe.
+- name: "Phase 3 - Cleanup Beta Large Job (Part 2)"
+  module:
+    path: modules/common_run_workloads.yaml
+    params:
+      # --- Basic Info ---
+      StepName: "Beta Team Large Job Cleanup"
+      StepId: BetaTeamLargeJobsCleanup
+      Group: beta-team-large-job
+      WorkloadName: batch-job-beta-team-large-job
+      WorkloadType: beta-team
+      TemplatePath: common/job.yaml
+      Phase: "Phase 3"
+      Step: "Part 2; Cleanup Beta Large"
+      Namespace: "{{$NamespaceTeamBeta}}-0"
+      # --- Sizing & Resources ---
+      Size: {{$BetaLargeWorkloadSize}}
+      Replicas: 0
+      CpuRequest: {{$CpuRequest}}
+      # --- Kueue & Scheduling ---
+      PriorityClass: {{$priorityClassMedium}}
+      QueueName: fairsharing-beta-lq-0
+      # --- Behavior & Measurement ---
+      SleepDuration: "0s"
+      BindPort: {{$BIND_PORT}}
+      delete: true
+      create: false
+      DesiredRunningPods: 0
+      WaitForControlledPodsRunning: false
+      DiagnosticsPhase: "phase3"
+      OtherNamespace: "{{$NamespaceTeamAlpha}}-0"
+
+- name: "Phase 3 - Teardown 1: Delete Namespaces"
+  phases:
+  - replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$NamespaceTeamAlpha}}
+        objectTemplatePath: common/namespace.yaml
+  - replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$NamespaceTeamBeta}}
+        objectTemplatePath: common/namespace.yaml
+
+- name: "Phase 3 - Teardown 2: Delete ClusterQueues"
+  phases:
+  - namespaceList: [""] # Target cluster scope.
+    replicasPerNamespace: 0 # Trigger deletion.
+    tuningSet: default
+    objectBundle:
+    # Delete Alpha CQ
+    - basename: fairsharing-alpha-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamAlpha}}-0"
+        FairSharingWeight: {{$WeightAlpha}}
+        Preemption: true
+        Cohort: research-cohort
+    # Delete Beta CQ
+    - basename: fairsharing-beta-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$NamespaceTeamBeta}}-0"
+        FairSharingWeight: {{$WeightBeta}}
+        Preemption: true
+        Cohort: research-cohort
+    # Delete Buffer CQ
+    - basename: fairsharing-buffer-cq
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: ""
+        FairSharingWeight: 0
+        Preemption: false
+        Cohort: research-cohort

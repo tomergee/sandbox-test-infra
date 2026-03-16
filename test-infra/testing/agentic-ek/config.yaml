@@ -1,0 +1,79 @@
+# Sleep time to make sure the cluster has scaled-up and downsized the nodes.
+{{$SLEEP_FOR_CLUSTER_PREP := DefaultParam .CL2_SLEEP_FOR_CLUSTER_PREP "10m"}}
+
+# Test parameters
+{{$PODS_PER_SECOND := DefaultParam .CL2_PODS_PER_SECOND 100}}
+{{$PODS_MEM_REQUEST := DefaultParam .CL2_PODS_MEM_REQUEST "128Mi"}}
+{{$PODS_CPU_REQUEST := DefaultParam .CL2_PODS_CPU_REQUEST "100m"}}
+{{$ENABLE_PSL_BY_ORDER := DefaultParam .CL2_ENABLE_PSL_BY_ORDER true}}
+{{$P50_THRESHOLD := DefaultParam .CL2_P50_THRESHOLD "30s"}}
+{{$P90_THRESHOLD := DefaultParam .CL2_P90_THRESHOLD "1m"}}
+{{$P99_THRESHOLD := DefaultParam .CL2_P99_THRESHOLD "10m"}}
+{{$MAX_POD_STARTUP_THRESHOLD := DefaultParam .CL2_MAX_POD_STARTUP_THRESHOLD "10m"}}
+{{$TIMEOUT := DefaultParam .CL2_TIMEOUT "15m"}}
+{{$TOTAL_PODS := MultiplyInt $PODS_PER_SECOND 60}}
+
+name: agentic-ek-test
+namespace:
+  number: 1
+
+tuningSets:
+- name: BurstRateLimit
+  qpsLoad:
+    qps: {{$PODS_PER_SECOND}}
+    burst: 1
+
+steps:
+- name: Waiting for {{$SLEEP_FOR_CLUSTER_PREP}} before starting the test to allow cluster preparation, scaling-up and downsizing.
+  measurements:
+  - Identifier: WaitForClusterPrep
+    Method: Sleep
+    Params:
+      duration: {{$SLEEP_FOR_CLUSTER_PREP}}
+
+- name: Start Pod Startup Latency Measurement
+  measurements:
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = stress-test
+      mapEventsByOrder: {{$ENABLE_PSL_BY_ORDER}}
+      # Latency thresholds for P50 and P90
+      perc50Threshold: {{$P50_THRESHOLD}}
+      perc90Threshold: {{$P90_THRESHOLD}}
+      perc99Threshold: {{$P99_THRESHOLD}}
+      threshold: {{$MAX_POD_STARTUP_THRESHOLD}}
+
+- name: Create Stress Test Pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: 1
+    replicasPerNamespace: {{$TOTAL_PODS}}
+    tuningSet: BurstRateLimit
+    objectBundle:
+    - basename: stress-pod
+      objectTemplatePath: pod-request.yaml
+      templateFillMap:
+        Group: stress-test
+        MemRequest: {{$PODS_MEM_REQUEST}}
+        CpuRequest: {{$PODS_CPU_REQUEST}}
+
+
+- name: Wait for Pods to be Running
+  measurements:
+  - Identifier: WaitForRunningPods
+    Method: WaitForRunningPods
+    Params:
+      action: gather # This method typically only needs 'gather'
+      labelSelector: group = stress-test
+      desiredPodCount: {{$TOTAL_PODS}}
+      timeout: {{$TIMEOUT}}
+
+- name: Collect Latency Results
+  measurements:
+  - Identifier: PodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather

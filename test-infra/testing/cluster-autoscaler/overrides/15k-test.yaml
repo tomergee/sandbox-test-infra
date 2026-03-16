@@ -1,0 +1,46 @@
+CUSTOM_API_CALL_THRESHOLDS: |
+  - verb: POST
+    resource: nodes
+    subresource: ''
+    scope: cluster
+    threshold: 3s
+  - verb: PATCH
+    resource: nodes
+    subresource: ''
+    scope: cluster
+    threshold: 3s
+  - verb: PATCH
+    resource: nodes
+    subresource: status
+    scope: cluster
+    threshold: 3s
+  - verb: POST
+    resource: pods
+    subresource: ''
+    scope: namespace
+    threshold: 3s
+  - verb: LIST
+    resource: events
+    subresource: ''
+    scope: namespace
+    threshold: 60s
+  - verb: LIST
+    resource: events
+    subresource: ''
+    scope: resource
+    threshold: 10s
+  - verb: POST
+    resource: events
+    subresource: ''
+    scope: resource
+    threshold: 5s
+  - verb: PATCH
+    resource: events
+    subresource: ''
+    scope: resource
+    threshold: 10s
+  - verb: GET
+    resource: ''
+    subresource: '/healthz'
+    scope: ''
+    threshold: 3s

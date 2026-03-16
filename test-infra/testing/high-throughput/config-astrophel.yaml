@@ -1,0 +1,106 @@
+{{$namespaces := 80}}
+{{$defaultQps := 100}}
+{{$numDaemonsets := DefaultParam .CL2_NUM_DAEMONSETS 15}}
+
+{{$HERO_JOB_SIZE := DefaultParam .CL2_HERO_JOB_SIZE 1600}}
+{{$ENABLE_PV_TEST := DefaultParam .CL2_ENABLE_PV_TEST false}}
+{{$ENABLE_GPU_TEST := DefaultParam .CL2_ENABLE_GPU_TEST false}}
+
+name: load
+namespace:
+  number: {{$namespaces}}
+  deleteStaleNamespaces: true # for experiments
+tuningSets:
+- name: default
+  globalQPSLoad:
+    qps: {{$defaultQps}}
+    burst: 1
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+
+steps:
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: start
+
+- name: Creating PriorityClass for DaemonSets
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: daemonset-priorityclass
+        objectTemplatePath: priorityclass.yaml
+        templateFillMap:
+          Value: 1000000
+
+- module:
+    path: modules/daemonsets.yaml
+    params:
+      create: true
+      minNamespace: 1
+      maxNamespace: {{$numDaemonsets}}
+
+- module:
+    path: modules/statefulsets-astrophel.yaml
+    params:
+      basename: inference-job
+      scaleDown: false
+      usePVs: false
+      useGPUs: false
+      minNamespace: 1
+      maxNamespace: {{$namespaces}}
+      size: 64
+
+- module:
+    path: modules/statefulsets-astrophel.yaml
+    params:
+      basename: hero-job-bare
+      scaleDown: false
+      usePVs: false
+      useGPUs: false
+      minNamespace: 1
+      maxNamespace: 1
+      size: {{$HERO_JOB_SIZE}}
+
+{{if $ENABLE_PV_TEST}}
+- module:
+    path: modules/statefulsets-astrophel.yaml
+    params:
+      basename: hero-job-pvs
+      scaleDown: true
+      usePVs: true
+      useGPUs: false
+      minNamespace: 1
+      maxNamespace: 1
+      size: {{$HERO_JOB_SIZE}}
+{{end}}
+
+
+{{if $ENABLE_GPU_TEST}}
+- module:
+    path: modules/statefulsets-astrophel.yaml
+    params:
+      basename: hero-job-gpus
+      scaleDown: false
+      usePVs: false
+      useGPUs: true
+      minNamespace: 1
+      maxNamespace: 1
+      size: {{$HERO_JOB_SIZE}}
+{{end}}
+
+- module:
+    path: modules/daemonsets.yaml
+    params:
+      delete: true
+      minNamespace: 1
+      maxNamespace: {{$numDaemonsets}}
+
+# We leak priorityclass objects. CL2 will remove them as part of test teardown.
+
+- module:
+    path: modules/measurements.yaml
+    params:
+      action: gather

@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: ek-upsize-deployment
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      group: ek-upsize-test
+  template:
+    metadata:
+      labels:
+        group: ek-upsize-test
+    spec:
+      nodeSelector:
+        cloud.google.com/compute-class: autopilot
+      containers:
+        - name: pause
+          image: k8s.gcr.io/pause:3.1
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"

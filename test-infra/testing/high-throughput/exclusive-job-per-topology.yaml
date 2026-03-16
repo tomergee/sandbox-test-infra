@@ -1,0 +1,59 @@
+{{$CpuRequest := DefaultParam .CpuRequest "5m"}}
+{{$MemoryRequest := DefaultParam .MemoryRequest "20M"}}
+{{$PodPayloadSize := DefaultParam .CL2_POD_PAYLOAD_SIZE 1024}}
+{{$SchedulerName := DefaultParam .CL2_SCHEDULER_NAME "default-scheduler"}}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.Name}}
+  labels:
+    name: {{.Name}}
+    group: load
+spec:
+  parallelism: {{.Replicas}}
+  completions: {{.Replicas}}
+  completionMode: {{.Mode}}
+  template:
+    metadata:
+      labels:
+        name: {{.Name}}
+        group: load
+    spec:
+      schedulerName: {{$SchedulerName}}
+      containers:
+      - name: {{.Name}}
+        image: gcr.io/k8s-staging-perf-tests/sleep:v0.0.3
+        args:
+          - {{.Sleep}}
+        resources:
+          requests:
+            cpu: {{$CpuRequest}}
+            memory: {{$MemoryRequest}}
+        env:
+        - name: ENV_VAR
+          value: {{RandData $PodPayloadSize}}
+      restartPolicy: Never
+      # pod affinity / anti-affinity configured to assign 1:1 job per topology domain
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: job-name   # colocate the pods of this job
+                operator: In
+                values:
+                - {{.Name}}
+            topologyKey: group  # the grouping domain
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: job-name
+                operator: Exists
+              - key: job-name
+                operator: NotIn
+                values:
+                - {{.Name}}
+            namespaceSelector: {}
+            topologyKey: group

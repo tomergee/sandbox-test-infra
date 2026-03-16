@@ -1,0 +1,105 @@
+{{$image := .image}}
+
+steps:
+{{if .create}}
+- name: Starting measurement for services
+  measurements:
+  - Identifier: WaitForRunningServiceStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      action: start
+      labelSelector: group = load-service-statefulsets
+      operationTimeout: 10m
+- name: Creating services- {{.num64PodServices}} of size 64 and {{SubtractInt .numTotalServices .num64PodServices}} of size 1
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: {{.num64PodServices}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: service-64-pods
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        SvcName: svc-64-pods
+        MultipleSvcs: true
+    - basename: statefulset-64-pods
+      objectTemplatePath: statefulset.yaml
+      templateFillMap:
+        SvcName: svc-64-pods
+        MultipleSvcs: true
+        Replicas: 64
+        image: {{$image}}
+        group: load-service-statefulsets
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: {{SubtractInt .numTotalServices .num64PodServices}}
+    tuningSet: Sequence
+    objectBundle:
+    - basename: service-single-pod
+      objectTemplatePath: service.yaml
+      templateFillMap:
+        MultipleSvcs: true
+        SvcName: svc-single-pod
+    - basename: statefulset-single-pod
+      objectTemplatePath: statefulset.yaml
+      templateFillMap:
+        MultipleSvcs: true
+        SvcName: svc-single-pod
+        Replicas: 1
+        image: {{$image}}
+        group: load-service-statefulsets
+
+
+- name: Waiting for 'create' to be completed
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Identifier: WaitForRunningServiceStatefulSets
+    Params:
+      action: gather
+
+{{end}}
+{{if .delete}}
+- name: Starting measurements for 'delete' services
+  measurements:
+  - Identifier: WaitForDeletingServiceStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      action: start
+      labelSelector: group = load-service-statefulsets
+      operationTimeout: 10m
+- name: Deleting services
+  phases:
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: service-single-pod
+      objectTemplatePath: service.yaml
+    - basename: statefulset-single-pod
+      objectTemplatePath: statefulset.yaml
+  - namespaceRange:
+      min: {{.minNamespace}}
+      max: {{.maxNamespace}}
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+    - basename: service-64-pods
+      objectTemplatePath: service.yaml
+    - basename: statefulset-64-pods
+      objectTemplatePath: statefulset.yaml
+
+- name: Waiting for 'delete' to be completed
+  measurements:
+  - Identifier: WaitForDeletingServiceStatefulSets
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+{{end}}

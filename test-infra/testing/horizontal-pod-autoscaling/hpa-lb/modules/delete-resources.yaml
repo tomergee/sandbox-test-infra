@@ -1,0 +1,26 @@
+## Input params
+{{$namespaces := .namespaces}}
+{{$lbHttpRoutesPerGateway := .lbHttpRoutesPerGateway}}
+
+
+steps:
+- name: Deleting saturation pods
+  phases:
+  - namespaceRange:
+      min: 1
+      max: {{$namespaces}}
+    replicasPerNamespace: 0
+    tuningSet: RandomizedDeletionTimeLimited
+    objectBundle:
+    - basename: lb-deployment
+      objectTemplatePath: hpa-lb/deployment-lb.yaml
+    - basename: lb-hpa
+      objectTemplatePath: hpa-lb/hpa-lb.yaml
+    - basename: lb-service
+      objectTemplatePath: hpa-lb/service-lb.yaml
+    - basename: lb-gateway
+      objectTemplatePath: hpa-lb/gateway-lb.yaml
+  {{range $httpRouteIndex := Loop $lbHttpRoutesPerGateway}}
+    - basename: lb-httproute-{{$httpRouteIndex}}
+      objectTemplatePath: hpa-lb/httproute-lb.yaml
+  {{end}}

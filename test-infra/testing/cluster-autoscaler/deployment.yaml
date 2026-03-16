@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  labels:
+    group: ca
+spec:
+  replicas: {{.Replicas}}
+  selector:
+    matchLabels:
+      name: {{.Name}}
+  template:
+    metadata:
+      labels:
+        group: ca
+        name: {{.Name}}
+    spec:
+      containers:
+      - image: k8s.gcr.io/pause:3.1
+        name: {{.Name}}
+        resources:
+          requests:
+            cpu: "{{.CpuRequest}}m"
+            memory: "{{.MemoryRequest}}Mi"
+{{if .EnforceOnePerNode}}
+        ports:
+        - name: http
+          containerPort: 80
+          hostPort: 80
+{{end}}
+{{if .PauseInPrestop}}
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/pause"]
+{{end}}
+      dnsPolicy: Default
+{{if .TerminationGracePeriodSeconds}}
+      terminationGracePeriodSeconds: {{.TerminationGracePeriodSeconds}}
+{{end}}
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+{{if .WorkloadSeparation}}
+      - key: "workload"
+        operator: "Equal"
+        value: "workload-{{.Index}}"
+        effect: "NoSchedule"
+{{end}}
+      nodeSelector:
+{{if .WorkloadSeparation}}
+        workload: workload-{{.Index}}
+{{end}}
+{{if .InstanceTypeSelector}}
+        node.kubernetes.io/instance-type: {{.InstanceTypeSelector}}
+{{end}}

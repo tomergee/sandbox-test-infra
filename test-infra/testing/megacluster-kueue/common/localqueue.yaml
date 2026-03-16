@@ -1,0 +1,25 @@
+# ==============================================================================
+# Kueue LocalQueue Configuration Template
+#
+# This template defines a Kueue LocalQueue resource, which acts as an entry
+# point within a specific namespace for workloads to be admitted by Kueue.
+# It links workloads submitted to this namespace/LocalQueue to a ClusterQueue
+# for resource management and scheduling decisions.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Template Variables Definition
+# ------------------------------------------------------------------------------
+{{$Namespace := .Namespace}}     # The namespace where this LocalQueue will reside.
+{{$ClusterQueue := .ClusterQueue}} # The name of the ClusterQueue this LocalQueue forwards workloads to.
+{{$CONFIG_API_VERSION := DefaultParam .CL2_CONFIG_API_VERSION "v1beta1"}} # v1beta2 is supported only in 0.15+
+# ==============================================================================
+# LocalQueue Resource Definition
+# ==============================================================================
+apiVersion: kueue.x-k8s.io/{{$CONFIG_API_VERSION}}
+kind: LocalQueue
+metadata:
+  namespace: {{$Namespace}}
+  name: {{.Name}}
+spec:
+  clusterQueue: {{$ClusterQueue}}

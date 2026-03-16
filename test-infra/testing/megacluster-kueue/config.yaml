@@ -1,0 +1,324 @@
+# ==============================================================================
+# ClusterLoader2 Main Test Configuration
+#
+# This file defines the overall structure and execution flow for a Kueue
+# performance and scalability test suite. It orchestrates several phases,
+# including burst workloads, priority/preemption scenarios, and fair sharing tests.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Global Parameters & Configuration Toggles
+# ------------------------------------------------------------------------------
+{{$DEFAULT_QPS := DefaultParam .CL2_DEFAULT_QPS 100}} # Default QPS limit for API calls.
+
+# --- Namespaces ---
+{{$NAMESPACE_BURST := DefaultParam .CL2_NAMESPACE_BURST "kueue-burst-workloads"}} # Namespace for Phase 1 (Burst).
+{{$NAMESPACE_PRIORITY := DefaultParam .CL2_NAMESPACE_PRIORITY "kueue-priority-workloads"}} # Namespace for Phase 2 (Priority/Preemption).
+{{$NAMESPACE_FAIRSHARING_TEAM_ALPHA := DefaultParam .CL2_NAMESPACE_FAIRSHARING_TEAM_ALPHA "kueue-fairsharing-team-alpha"}} # Namespace for Team Alpha in Phase 3.
+{{$NAMESPACE_FAIRSHARING_TEAM_BETA := DefaultParam .CL2_NAMESPACE_FAIRSHARING_TEAM_BETA "kueue-fairsharing-team-beta"}} # Namespace for Team Beta in Phase 3.
+{{$NAMESPACE_TAS := DefaultParam .CL2_NAMESPACE_TAS "kueue-tas-workloads"}} # Namespace for Phase 4 (Topology Aware Scheduling).
+
+# --- Phase Control ---
+{{$ENABLE_PHASE_1 := DefaultParam .CL2_ENABLE_PHASE_1 true}} # Enable/disable Phase 1 (Burst).
+{{$ENABLE_PHASE_2 := DefaultParam .CL2_ENABLE_PHASE_2 true}} # Enable/disable Phase 2 (Priority/Preemption).
+{{$ENABLE_PHASE_3 := DefaultParam .CL2_ENABLE_PHASE_3 true}} # Enable/disable Phase 3 (Fair Sharing).
+{{$ENABLE_PHASE_4 := DefaultParam .CL2_ENABLE_PHASE_4 true}} # Enable/disable Phase 4 (Topology Aware Scheduling).
+{{$SleepDurationBetweenPhases := DefaultParam .CL2_SLEEP_DURATION_BETWEEN_PHASES "1m"}} # Pause duration between phases.
+
+# --- Environment & Debugging ---
+{{$LOCAL_RUN := .CL2_LOCAL_RUN}}                   # Flag indicating local execution (skips cluster setup/measurement).
+{{$SLEEP_ONLY := DefaultParam .CL2_SLEEP_ONLY false}} # If true, skips all phases and just sleeps (for debugging setup).
+
+{{$KUEUE_CONFIGURATIONS_REDUCED := DefaultParam .CL2_KUEUE_CONFIGURATIONS_REDUCED true}} # If false, disabled support for lws, deployment, and fairsharing
+{{$KUEUE_CONFIGURATIONS_TAS_ENABLED := DefaultParam .CL2_KUEUE_CONFIGURATIONS_TAS_ENABLED true}} # If false, disable TAS support
+{{$KUEUE_VERSION := DefaultParam .CL2_KUEUE_VERSION "latest"}}
+{{$KUEUE_CONFIGURATION_REPLICAS := DefaultParam .CL2_KUEUE_CONFIGURATION_REPLICAS 1}}
+{{$KUEUE_CONFIGURATION_CPU := DefaultParam .CL2_KUEUE_CONFIGURATION_CPU nil}}
+{{$KUEUE_CONFIGURATION_MEMORY := DefaultParam .CL2_KUEUE_CONFIGURATION_MEMORY nil}}
+{{$KUEUE_CONFIGURATION_HIGH_THROUGHPUT := DefaultParam .CL2_KUEUE_CONFIGURATION_HIGH_THROUGHPUT false}}
+
+{{$CustomTopologyLevelChildrenRanges := DefaultParam .CL2_CustomTopologyLevelChildrenRanges "1:3,1:3"}}
+
+
+# --- Global configurations ---
+{{$ThroughputThreshold := DefaultParam .CL2_THROUGHPUT_THRESHOLD nil}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{$PodStartupLatencyThreshold := DefaultParam .CL2_POD_STARTUP_LATENCY_THRESHOLD nil}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+
+{{$ENABLE_TAS_KUEUE_PPROF := DefaultParam .CL2_ENABLE_TAS_KUEUE_PPROF false}}
+{{$ENABLE_TAS_KUEUE_CONTROLLER_RESOURCES := DefaultParam .CL2_ENABLE_TAS_KUEUE_CONTROLLER_RESOURCES false}}
+
+# ==============================================================================
+# ClusterLoader2 Test Definition
+# ==============================================================================
+name: kueue-scalability-load # Name of the overall test suite.
+namespace:
+  number: 0 # Number of baseline namespaces CL2 manages (0 means we manage via steps).
+  deleteAutomanagedNamespaces: true
+tuningSets:
+  # Default tuning set with global QPS limit.
+- name: default
+  globalQPSLoad:
+    qps: {{$DEFAULT_QPS}}
+    burst: 1 # Allow minimal bursting.
+  # Tuning set for sequential execution (e.g., creating cluster-scoped resources).
+- name: Sequence
+  parallelismLimitedLoad:
+    parallelismLimit: 1
+
+steps:
+
+# ------------------------------------------------------------------------------
+# Initial Setup (Cluster Setup, Measurements, Common Resources)
+# ------------------------------------------------------------------------------
+
+- name: "Setup 0: Initialize Kueue on Cluster"
+  measurements:
+  - Identifier: SetupKueue
+    Method: Exec
+    Params:
+      timeout: 30m
+      command:
+      - "bash"
+      {{if $LOCAL_RUN}}
+      - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/setup_cluster.sh"
+      {{else}}
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/setup_cluster.sh"
+      {{end}}
+      - "create" # Action for the script.
+      - "--kueue-version"
+      - "{{$KUEUE_VERSION}}"
+      - "--high-throughput"
+      - "{{$KUEUE_CONFIGURATION_HIGH_THROUGHPUT}}"
+      - "--replicas"
+      - "{{$KUEUE_CONFIGURATION_REPLICAS}}"
+      {{if $KUEUE_CONFIGURATION_CPU}}
+      - "--cpu"
+      - "{{$KUEUE_CONFIGURATION_CPU}}"
+      {{end}}
+      {{if $KUEUE_CONFIGURATION_MEMORY}}
+      - "--memory"
+      - "{{$KUEUE_CONFIGURATION_MEMORY}}"
+      {{end}}
+      - "--reduced-mode"
+      - "{{$KUEUE_CONFIGURATIONS_REDUCED}}"
+      - "--enable-tas"
+      - "{{$KUEUE_CONFIGURATIONS_TAS_ENABLED}}"
+      - "--install-jobset"
+      - "true" # jobset always enabled
+
+
+- name: "Setup 1: Start Global Measurements"
+  module:
+    path: modules/measurements.yaml
+    params:
+      action: start
+
+# --- Create Common Cluster-Scoped Resources ---
+
+- name: "Setup 2: Create Low WorkloadPriorityClass"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: priorityclass-low
+        objectTemplatePath: common/workloadpriority.yaml
+        templateFillMap:
+          Value: 1000
+
+- name: "Setup 3: Create Medium WorkloadPriorityClass"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: priorityclass-medium
+        objectTemplatePath: common/workloadpriority.yaml
+        templateFillMap:
+          Value: 2000
+
+- name: "Setup 4: Create High WorkloadPriorityClass"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: priorityclass-high
+        objectTemplatePath: common/workloadpriority.yaml
+        templateFillMap:
+          Value: 3000
+
+- name: "Setup 5: Create Default ResourceFlavor"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: default
+        objectTemplatePath: common/resourceflavor.yaml
+        # templateFillMap: # Add if the template requires parameters.
+
+{{if or $ENABLE_TAS_KUEUE_PPROF $ENABLE_TAS_KUEUE_CONTROLLER_RESOURCES}}
+- name: "Setup 6: Create profiler dependencies"
+  measurements:
+  - Identifier: SetupKueue
+    Method: Exec
+    Params:
+      timeout: 30m
+      command:
+      - "kubectl"
+      - "apply"
+      - "-f"
+      {{if $LOCAL_RUN}}
+      - "../../../../../src/gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/modules/pprof.yaml"
+      {{else}}
+      - "../../../gke-internal.googlesource.com/test-infra/perf-tests/testing/megacluster-kueue/modules/pprof.yaml"
+      {{end}}
+{{end}}
+# ------------------------------------------------------------------------------
+# Test Execution (Phases or Sleep Only)
+# ------------------------------------------------------------------------------
+
+{{if $SLEEP_ONLY}} # --- Sleep Only Mode ---
+- name: "Sleep Only Mode Activated"
+  measurements:
+  - Identifier: LongSleepStep
+    Method: Sleep
+    Params:
+      duration: "12h" # Long sleep duration for debugging setup.
+{{else}} # --- Normal Phase Execution ---
+
+# --- Phase 1: Burst Workloads ---
+{{if $ENABLE_PHASE_1}}
+- name: "Execute Phase 1: Burst Workloads"
+  module:
+    path: modules/phase1_burst.yaml
+    params:
+      priorityClassLow: priorityclass-low-0
+      Namespace: "{{$NAMESPACE_BURST}}"
+      {{if not (eq $ThroughputThreshold nil)}}
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      {{end}}
+      {{if not (eq $PodStartupLatencyThreshold nil)}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      {{end}}
+
+- name: "Sleep Between Phases (After Phase 1)"
+  measurements:
+  - Identifier: SleepAfterPhase1
+    Method: Sleep
+    Params:
+      duration: {{$SleepDurationBetweenPhases}}
+{{end}}
+
+# --- Phase 2: Priority and Preemption ---
+{{if $ENABLE_PHASE_2}}
+- name: "Execute Phase 2: Priority & Preemption"
+  module:
+    path: modules/phase2_priority_preemption.yaml
+    params:
+      priorityClassLow: priorityclass-low-0
+      priorityClassMedium: priorityclass-medium-0
+      priorityClassHigh: priorityclass-high-0
+      Namespace: "{{$NAMESPACE_PRIORITY}}"
+      {{if not (eq $ThroughputThreshold nil)}}
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      {{end}}
+      {{if not (eq $PodStartupLatencyThreshold nil)}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      {{end}}
+
+- name: "Sleep Between Phases (After Phase 2)"
+  measurements:
+  - Identifier: SleepAfterPhase2
+    Method: Sleep
+    Params:
+      duration: {{$SleepDurationBetweenPhases}}
+{{end}}
+
+# --- Phase 3: Fair Sharing ---
+{{if $ENABLE_PHASE_3}}
+- name: "Execute Phase 3: Fair Sharing"
+  module:
+    path: modules/phase3_fairsharing.yaml
+    params:
+      priorityClassLow: priorityclass-low-0
+      priorityClassMedium: priorityclass-medium-0
+      priorityClassHigh: priorityclass-high-0
+      NamespaceTeamAlpha: "{{$NAMESPACE_FAIRSHARING_TEAM_ALPHA}}"
+      NamespaceTeamBeta: "{{$NAMESPACE_FAIRSHARING_TEAM_BETA}}"
+      {{if not (eq $ThroughputThreshold nil)}}
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      {{end}}
+      {{if not (eq $PodStartupLatencyThreshold nil)}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      {{end}}
+
+- name: "Sleep Between Phases (After Phase 3)"
+  measurements:
+  - Identifier: SleepAfterPhase3
+    Method: Sleep
+    Params:
+      duration: {{$SleepDurationBetweenPhases}}
+{{end}}
+
+
+
+# --- Phase 4: Topology Aware Scheduling ---
+{{if $ENABLE_PHASE_4}}
+- name: "Execute Phase 4: Topology Aware Scheduling"
+  module:
+    path: modules/phase4_tas.yaml
+    params:
+      priorityClassLow: priorityclass-low-0
+      Namespace: "{{$NAMESPACE_TAS}}"
+      {{if not (eq $ThroughputThreshold nil)}}
+      ThroughputThreshold: {{$ThroughputThreshold}}
+      {{end}}
+      {{if not (eq $PodStartupLatencyThreshold nil)}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      {{end}}
+{{end}}
+
+{{end}} # End of normal phase execution block
+
+# ------------------------------------------------------------------------------
+# Final Measurements & Cleanup
+# ------------------------------------------------------------------------------
+
+- name: "Final: Gather Global Measurements"
+  module:
+    path: modules/measurements.yaml
+    params:
+      action: gather
+
+{{if not $LOCAL_RUN}} # Skip gathering measurements and cleanup if running locally.
+# --- Cleanup Cluster-Scoped Resources ---
+- name: "Cleanup: Delete WorkloadPriorityClasses"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      # Delete Low Priority Class
+      - basename: priorityclass-low
+        objectTemplatePath: common/workloadpriority.yaml
+        templateFillMap:
+          Value: 1000
+      # Delete Medium Priority Class
+      - basename: priorityclass-medium
+        objectTemplatePath: common/workloadpriority.yaml
+        templateFillMap:
+          Value: 2000
+      # Delete High Priority Class
+      - basename: priorityclass-high
+        objectTemplatePath: common/workloadpriority.yaml
+        templateFillMap:
+          Value: 3000
+
+- name: "Cleanup: Delete Default ResourceFlavor"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      - basename: default
+        objectTemplatePath: common/resourceflavor.yaml
+
+{{end}}

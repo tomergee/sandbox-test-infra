@@ -1,0 +1,58 @@
+# Design doc go/ca-pr-dd API specification: go/ca-pr-dd:api-review
+apiVersion: v1
+kind: PodTemplate
+metadata:
+  name: {{.Name}}
+template:
+  metadata:
+    labels:
+      group: ca
+  spec:
+    nodeSelector:
+{{ if .WorkloadSeparation }}
+      group: group-{{.Index}}
+{{end}}
+{{ if .PodMachineFamily }}
+      cloud.google.com/machine-family: {{.PodMachineFamily}}
+{{end}}
+    containers:
+    - image: k8s.gcr.io/pause:3.1
+      name: "placeholder-name"
+{{if .EnforceOnePerNode}}
+      ports:
+      - name: http
+        containerPort: 80
+        hostPort: 80
+{{end}}
+      resources:
+        requests:
+          cpu: "{{.CpuRequest}}m"
+          memory: "{{.MemoryRequest}}Mi"
+{{ if ne .GpuRequest 0.0}}
+          nvidia.com/gpu: "{{.GpuRequest}}"
+{{end}}
+        limits:
+          cpu: "{{.CpuRequest}}m"
+          memory: "{{.MemoryRequest}}Mi"
+{{ if ne .GpuRequest 0.0}}
+          nvidia.com/gpu: "{{.GpuRequest}}"
+{{end}}
+    dnsPolicy: Default
+    tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node.kubernetes.io/not-ready"
+      operator: "Exists"
+      effect: "NoExecute"
+      tolerationSeconds: 300
+    - key: "node.kubernetes.io/unreachable"
+      operator: "Exists"
+      effect: "NoExecute"
+      tolerationSeconds: 300
+{{ if .WorkloadSeparation }}
+    - key: group
+      operator: "Equal"
+      value: "group-{{.Index}}"
+      effect: "NoSchedule"
+{{end}}

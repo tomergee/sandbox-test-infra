@@ -1,0 +1,51 @@
+[
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-0",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-1",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-2",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-3",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-4",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-5",
+      "host": "",
+      "status": "PendingNotScheduled"
+    },
+    {
+      "namespace": "test-9lnf4w-1",
+      "controlledBy": "test-9lnf4w-1/test-deployment-2-0",
+      "name": "test-deployment-2-0-5979cfd959-6",
+      "host": "",
+      "status": "PendingNotScheduled"
+    }
+  ]

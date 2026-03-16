@@ -1,0 +1,365 @@
+# ==============================================================================
+# ClusterLoader2 TAS (Topology Aware Scheduling) Test Module
+#
+# This module defines a sequence of steps to test Kueue's Topology Aware
+# Scheduling features. It involves setting up namespaces, topology objects,
+# specific ResourceFlavors, ClusterQueues, LocalQueues, and then creating
+# and deleting workloads.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Input Parameters & Calculated Variables
+# ------------------------------------------------------------------------------
+{{$Namespace := .Namespace}}                     # Base name for the namespace(s) created in the test.
+
+{{$Multiplier := .CL2_MULTIPLIER}}               # A multiplier used for scaling resource requests and workload sizes.
+
+{{$CpuRequest := DefaultParam .CL2_CPU_REQUEST "0.3"}} # Base CPU request per pod/replica.
+{{$MemoryRequest := DefaultParam .CL2_MEMORY_REQUEST "1"}} # Base CPU request per pod/replica.
+{{$SleepDuration := DefaultParam .CL2_SLEEP_DURATION "30s"}} # Default sleep duration between certain steps (if used).
+
+{{$PodPayloadSize := DefaultParam .CL2_TAS_POD_PAYLOAD_SIZE "102400"}} # Extra payload (100KB) in the form of env variable to increase object size
+{{$BindPort := DefaultParam .CL2_BIND_PORT false}}     # Whether workloads bind host ports.
+
+# Scenarios of testing
+{{$HERO_JOB_SCENARIO := DefaultParam .CL2_TAS_HERO_JOB_SCENARIO true}}
+{{$MULTIPLE_JOBS_SCENARIO := DefaultParam .CL2_TAS_MULTIPLE_JOBS_SCENARIO false}}
+{{$HERO_JOBSET_SCENARIO := DefaultParam .CL2_TAS_HERO_JOBSET_SCENARIO false}}
+{{$HERO_LWS_SCENARIO := DefaultParam .CL2_TAS_HERO_LWS_SCENARIO false}}
+
+{{$SkipNonTasWorkloadsOnTasCq := DefaultParam .CL2_SKIP_NON_TAS_WORKLOADS_ON_TAS_CQ false}}
+{{$SkipRequiredTopologyWorkload := DefaultParam .CL2_SKIP_REQUIRED_TOPOLOGY_WORKLOAD false}}
+{{$EnableRequiredSliceTopologyWorkload := DefaultParam .CL2_ENABLE_REQUIRED_SLICE_TOPOLOGY_WORKLOAD false}}
+
+# Define HERO_JOB_SCENARIO parameters
+{{$HERO_JOB_WORKLOAD_REPLICAS := 1}}             # Number of replicas for a hypothetical training workload.
+{{$HERO_JOB_WORKLOAD_SIZE := MultiplyInt $Multiplier 10}}       # Size parameter for a hypothetical training workload.
+
+# Define MULTIPLE_JOBS_SCENARIO parameters
+{{$MULTIPLE_JOBS_WORKLOAD_SIZE := DefaultParam .CL2_TAS_SMALL_WORKLOAD_SIZE 64}}       # Size parameter for a hypothetical training workload.
+{{$MULTIPLE_JOBS_WORKLOAD_REPLICAS := MultiplyInt 1 (MultiplyFloat 10  (DivideFloat $Multiplier $MULTIPLE_JOBS_WORKLOAD_SIZE))}}             # Number of replicas for a hypothetical training workload.
+
+# Define HERO_JOBSET_SCENARIO parameters
+{{$HERO_JOBSET_WORKLOAD_SIZE := DefaultParam .CL2_TAS_SMALL_WORKLOAD_SIZE 64}}       # Size parameter for a hypothetical training workload.
+{{$HERO_JOBSET_WORKLOAD_REPLICAS := MultiplyInt 1 (MultiplyFloat 10  (DivideFloat $Multiplier $HERO_JOBSET_WORKLOAD_SIZE))}}             # Number of replicas for a hypothetical training workload.
+
+
+# Define HERO_LWS_SCENARIO parameters
+{{$HERO_LWS_WORKLOAD_SIZE := DefaultParam .CL2_TAS_SMALL_WORKLOAD_SIZE 64}}       # Size parameter for a hypothetical training workload.
+{{$HERO_LWS_WORKLOAD_REPLICAS := MultiplyInt 1 (MultiplyFloat 10  (DivideFloat $Multiplier $HERO_LWS_WORKLOAD_SIZE))}}             # Number of replicas for a hypothetical training workload.
+
+# Calculate nominal quota based on WORKLOAD_REPLICAS, WORKLOAD_SIZE, and base CPU request.
+{{$NOMINAL_QUOTA := MultiplyFloat $Multiplier 10 $CpuRequest}}
+{{$MEMORY_NOMINAL_QUOTA := MultiplyInt $Multiplier 10 $MemoryRequest}}
+
+
+# --- Priority Classes (Passed into this module) ---
+{{$priorityClassLow := .priorityClassLow}}
+
+# Measurement Configuration
+{{$ThroughputThreshold := DefaultParam .ThroughputThreshold 10}} # Scheduling throughput threshold (pods/sec), value of 0 means to disable the measurement
+{{$PodStartupLatencyThreshold := DefaultParam .PodStartupLatencyThreshold "5m"}} # Pod Startup latency threshold (sec), empty means to disable the measurement
+
+
+# Topology Configuration
+{{$KUEUE_CONFIGURATIONS_TAS_ENABLED := DefaultParam .CL2_KUEUE_CONFIGURATIONS_TAS_ENABLED true}}
+
+{{$DefaultGkeTopology := .DefaultGkeTopology}}
+{{$TopologyName := .TopologyName}}
+{{$CustomTopologyLevels := .CustomTopologyLevels}}
+{{$CustomTopologyPrefix := .CustomTopologyPrefix}}
+{{$TargetTopologyLevel := .TargetTopologyLevel}}
+{{$TargetTopologyLevelIndex := .TargetTopologyLevelIndex}}
+{{$TargetTopologySliceLevel := .TargetTopologySliceLevel}}
+{{$TargetTopologySliceLevelIndex := .TargetTopologySliceLevelIndex}}
+# ==============================================================================
+# Steps Execution
+# ==============================================================================
+steps:
+
+# ------------------------------------------------------------------------------
+# Phase 4: Initialization and Setup
+# ------------------------------------------------------------------------------
+
+
+- name: "Phase 4 - {{$TopologyName}} - Init 0: Create Namespace {{$Namespace}}-0"
+  phases:
+  - replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$Namespace}}
+        objectTemplatePath: common/namespace.yaml
+{{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+- name: "Phase 4 - {{$TopologyName}} - Init 1: Create Topology Object"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    - basename: {{$TopologyName}}
+      objectTemplatePath: common/topology.yaml
+      templateFillMap:
+        DefaultGkeTopology: {{$DefaultGkeTopology}}
+        CustomLevelCount: {{SubtractInt $CustomTopologyLevels 1}} # - 1 cause the last layer has 1-1 mapping with K8s nodes, which are denoted by the label "kubernetes.io/hostname"
+        CustomTopologyPrefix: {{$CustomTopologyPrefix}}
+{{end}}
+
+- name: "Phase 4 - {{$TopologyName}} - Init 2: Create TAS ResourceFlavor (tas-resource-flavor-0)"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 1
+    tuningSet: Sequence
+    objectBundle:
+    {{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+      - basename: tas-resource-flavor
+        objectTemplatePath: common/resourceflavor.yaml
+        templateFillMap:
+          CompactPlacementNodesOnly: {{$DefaultGkeTopology}} # only compact if using GKE topology
+          Topology: "{{$TopologyName}}-0"
+    {{end}}
+      - basename: default-resource-flavor
+        objectTemplatePath: common/resourceflavor.yaml
+        templateFillMap:
+          CompactPlacementNodesOnly: false
+
+- name: "Phase 4 - {{$TopologyName}} - Init 3: Create ClusterQueue (tas-queue-0) with Nominal Quota {{$NOMINAL_QUOTA}} and Memory Nominal Quota {{$MEMORY_NOMINAL_QUOTA}}Mi"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    {{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+    - basename: tas-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        MemoryNominalQuota: "{{$MEMORY_NOMINAL_QUOTA}}Mi"
+        Preemption: false
+        CpuResourceFlavor: tas-resource-flavor-0
+    {{end}}
+    - basename: default-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        MemoryNominalQuota: "{{$MEMORY_NOMINAL_QUOTA}}Mi"
+        Preemption: false
+        CpuResourceFlavor: default-resource-flavor-0
+
+- name: "Phase 4 - {{$TopologyName}} - Init 4: Create LocalQueues"
+  phases:
+  - namespaceList:
+    - "{{$Namespace}}-0"
+    replicasPerNamespace: 1
+    tuningSet: default
+    objectBundle:
+    {{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+    - basename: tas-local-queue
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        ClusterQueue: tas-queue-0
+    {{end}}
+    - basename: default-local-queue
+      objectTemplatePath: common/localqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        ClusterQueue: default-queue-0
+
+
+# ------------------------------------------------------------------------------
+# Phase 4: Workload Execution
+# ------------------------------------------------------------------------------
+{{if $HERO_JOB_SCENARIO}}
+- module:
+    path: phase4/partial_run_topology_job.yaml # Path to the module file defined above
+    params:
+      ScenarioNameString: "{{$TopologyName}} - Hero Job Scenario"
+      ScenarioWorkloadSize: {{$HERO_JOB_WORKLOAD_SIZE}}
+      ScenarioWorkloadReplicas: {{$HERO_JOB_WORKLOAD_REPLICAS}}
+      Namespace: "{{$Namespace}}-0"
+      WorkloadCpuRequest: {{$CpuRequest}}
+      WorkloadMemoryRequest: {{$MemoryRequest}} # Pass the numeric value
+      WorkloadPriorityClass: {{$priorityClassLow}}
+      WorkloadSleepDuration: {{$SleepDuration}}
+      SchedulingThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      PodPayloadSize: {{$PodPayloadSize}}
+      Phase: "4"
+      DefaultKueueQueueName: "default-local-queue-0"
+      TasKueueQueueName: "tas-local-queue-0"
+      TargetTopologyLevel: {{$TargetTopologyLevel}}
+      TargetTopologyLevelIndex: {{$TargetTopologyLevelIndex}}
+      TargetTopologySliceLevel: {{$TargetTopologySliceLevel}}
+      TargetTopologySliceLevelIndex: {{$TargetTopologySliceLevelIndex}}
+      JobStepTimeout: "20m"
+      BindPort: {{$BindPort}}
+      TasEnabled: {{$KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+      WorkloadObject: "job"
+      SkipNonTasWorkloadsOnTasCq: {{$SkipNonTasWorkloadsOnTasCq}}
+      SkipRequiredTopologyWorkload: {{$SkipRequiredTopologyWorkload}}
+      EnableRequiredSliceTopologyWorkload: false # job workload doesn't support subslice topology annotation
+{{end}}
+
+{{if $MULTIPLE_JOBS_SCENARIO}}
+- module:
+    path: phase4/partial_run_topology_job.yaml
+    params:
+      ScenarioNameString: "{{$TopologyName}} - Multiple Jobs Scenario"
+      ScenarioWorkloadSize: {{$MULTIPLE_JOBS_WORKLOAD_SIZE}} # Ensure this is defined
+      ScenarioWorkloadReplicas: {{$MULTIPLE_JOBS_WORKLOAD_REPLICAS}} # Ensure this is defined
+      Namespace: "{{$Namespace}}-0"
+      WorkloadCpuRequest: {{$CpuRequest}}
+      WorkloadMemoryRequest: {{$MemoryRequest}}
+      WorkloadPriorityClass: {{$priorityClassLow}}
+      WorkloadSleepDuration: {{$SleepDuration}}
+      SchedulingThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      PodPayloadSize: {{$PodPayloadSize}}
+      Phase: "4"
+      DefaultKueueQueueName: "default-local-queue-0"
+      TasKueueQueueName: "tas-local-queue-0"
+      TargetTopologyLevel: {{$TargetTopologyLevel}}
+      TargetTopologyLevelIndex: {{$TargetTopologyLevelIndex}}
+      TargetTopologySliceLevel: {{$TargetTopologySliceLevel}}
+      TargetTopologySliceLevelIndex: {{$TargetTopologySliceLevelIndex}}
+      JobStepTimeout: "1h"
+      BindPort: {{$BindPort}}
+      TasEnabled: {{$KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+      WorkloadObject: "job"
+      SkipNonTasWorkloadsOnTasCq: {{$SkipNonTasWorkloadsOnTasCq}}
+      SkipRequiredTopologyWorkload: {{$SkipRequiredTopologyWorkload}}
+      EnableRequiredSliceTopologyWorkload: true # job workload doesn't support subslice topology annotation
+{{end}}
+{{if $HERO_JOBSET_SCENARIO}}
+- module:
+    path: phase4/partial_run_topology_job.yaml
+    params:
+      ScenarioNameString: "{{$TopologyName}} - Hero Jobset Scenario"
+      ScenarioWorkloadSize: {{$HERO_JOBSET_WORKLOAD_SIZE}}
+      ScenarioWorkloadReplicas: {{$HERO_JOBSET_WORKLOAD_REPLICAS}}
+      Namespace: "{{$Namespace}}-0"
+      WorkloadCpuRequest: {{$CpuRequest}}
+      WorkloadMemoryRequest: {{$MemoryRequest}}
+      WorkloadPriorityClass: {{$priorityClassLow}}
+      WorkloadSleepDuration: {{$SleepDuration}}
+      SchedulingThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      PodPayloadSize: {{$PodPayloadSize}}
+      Phase: "4"
+      DefaultKueueQueueName: "default-local-queue-0"
+      TasKueueQueueName: "tas-local-queue-0"
+      TargetTopologyLevel: {{$TargetTopologyLevel}}
+      TargetTopologyLevelIndex: {{$TargetTopologyLevelIndex}}
+      TargetTopologySliceLevel: {{$TargetTopologySliceLevel}}
+      TargetTopologySliceLevelIndex: {{$TargetTopologySliceLevelIndex}}
+      JobStepTimeout: "1h"
+      BindPort: {{$BindPort}}
+      TasEnabled: {{$KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+      WorkloadObject: "jobset"
+      SkipNonTasWorkloadsOnTasCq: {{$SkipNonTasWorkloadsOnTasCq}}
+      SkipRequiredTopologyWorkload: {{$SkipRequiredTopologyWorkload}}
+      EnableRequiredSliceTopologyWorkload: {{$EnableRequiredSliceTopologyWorkload}}
+      InObjectReplicas: true
+      ApiVersion: "jobset.x-k8s.io/v1alpha2"
+{{end}}
+
+
+{{if $HERO_LWS_SCENARIO}}
+- module:
+    path: phase4/partial_run_topology_job.yaml
+    params:
+      ScenarioNameString: "{{$TopologyName}} - Hero LWS Scenario"
+      ScenarioWorkloadSize: {{$HERO_LWS_WORKLOAD_SIZE}}
+      ScenarioWorkloadReplicas: {{$HERO_LWS_WORKLOAD_REPLICAS}}
+      Namespace: "{{$Namespace}}-0"
+      WorkloadCpuRequest: {{$CpuRequest}}
+      WorkloadMemoryRequest: {{$MemoryRequest}}
+      WorkloadPriorityClass: {{$priorityClassLow}}
+      WorkloadSleepDuration: {{$SleepDuration}}
+      SchedulingThroughputThreshold: {{$ThroughputThreshold}}
+      PodStartupLatencyThreshold: {{$PodStartupLatencyThreshold}}
+      PodPayloadSize: {{$PodPayloadSize}}
+      Phase: "4"
+      DefaultKueueQueueName: "default-local-queue-0"
+      TasKueueQueueName: "tas-local-queue-0"
+      TargetTopologyLevel: {{$TargetTopologyLevel}}
+      TargetTopologyLevelIndex: {{$TargetTopologyLevelIndex}}
+      TargetTopologySliceLevel: {{$TargetTopologySliceLevel}}
+      TargetTopologySliceLevelIndex: {{$TargetTopologySliceLevelIndex}}
+      JobStepTimeout: "1h"
+      BindPort: {{$BindPort}}
+      TasEnabled: {{$KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+      WorkloadObject: "lws"
+      SkipNonTasWorkloadsOnTasCq: {{$SkipNonTasWorkloadsOnTasCq}}
+      SkipRequiredTopologyWorkload: {{$SkipRequiredTopologyWorkload}}
+      EnableRequiredSliceTopologyWorkload: false # lws workload doesn't support subslice topology properly yet!
+      InObjectReplicas: true
+      ApiVersion: "leaderworkerset.x-k8s.io/v1"
+{{end}}
+
+# ------------------------------------------------------------------------------
+# Phase 4: Teardown
+# ------------------------------------------------------------------------------
+
+# Note: Deleting namespace often implicitly deletes namespaced resources like LocalQueue and workloads.
+# However, explicitly deleting workloads first might be cleaner in complex scenarios.
+- name: "Phase 4 - {{$TopologyName}} - Teardown 1: Delete Namespace {{$Namespace}}-0"
+  phases:
+  - replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+      - basename: {{$Namespace}}
+        objectTemplatePath: common/namespace.yaml
+
+# Deleting cluster-scoped resources like ClusterQueue and ResourceFlavor explicitly.
+- name: "Phase 4 - {{$TopologyName}} - Teardown 2: Delete ClusterQueue (main-queue-0)"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    {{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+    - basename: tas-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        MemoryNominalQuota: {{$MEMORY_NOMINAL_QUOTA}}
+        Preemption: true
+        CpuResourceFlavor: tas-resource-flavor-0
+    {{end}}
+    - basename: default-queue
+      objectTemplatePath: common/clusterqueue.yaml
+      templateFillMap:
+        Namespace: "{{$Namespace}}-0"
+        NominalQuota: {{$NOMINAL_QUOTA}}
+        MemoryNominalQuota: {{$MEMORY_NOMINAL_QUOTA}}
+        Preemption: true
+        CpuResourceFlavor: default-resource-flavor-0
+
+{{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+- name: "Phase 4 - {{$TopologyName}} - Teardown 3: Delete Topology Object ({{$TopologyName}}-0)"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: {{$TopologyName}}
+      objectTemplatePath: common/topology.yaml
+{{end}}
+
+
+- name: "Phase 4 - {{$TopologyName}} - Teardown 4: Delete TAS ResourceFlavor (tas-resource-flavor-0)"
+  phases:
+  - namespaceList: [""]
+    replicasPerNamespace: 0
+    tuningSet: Sequence
+    objectBundle:
+{{if $KUEUE_CONFIGURATIONS_TAS_ENABLED}}
+      - basename: tas-resource-flavor
+        objectTemplatePath: common/resourceflavor.yaml
+{{end}}
+      - basename: default-resource-flavor
+        objectTemplatePath: common/resourceflavor.yaml

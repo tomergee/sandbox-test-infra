@@ -1,0 +1,19 @@
+BACKUP_TIMEOUT: "2h"
+RESTORE_TIMEOUT: "6h"
+
+NAMESPACES: 5
+SMALL_CONFIG_MAP_COUNT: 0
+SMALL_SECRET_COUNT: 0
+
+# This override is for cluster with 1k nodes, each DaemonSet has 1k replicas.
+# It contains 20k Pods per namespace:
+# - 2k Jobs (no parallel) = 2K Pods.
+# - 10 DaemonSets (1k replicas for each) = 10k Pods.
+# - 100 Deployments (80 replicas for each) = 8k Pods.
+
+JOBS_PER_NAMESPACE: 2000
+DAEMON_SETS_PER_NAMESPACE: 10
+DEPLOYMENTS_PER_NAMESPACE: 100
+DEPLOYMENT_SIZE: 80
+
+HAS_VOLUMES: false

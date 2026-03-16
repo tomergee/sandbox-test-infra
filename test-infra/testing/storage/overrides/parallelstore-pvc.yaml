@@ -1,0 +1,12 @@
+PVC_STORAGE_CLASS: "csi-parallelstore"
+CAPACITY: "12000Gi"
+PVC_ACCESS_MODE: "ReadWriteMany"
+USE_DEPLOYMENT: true # Deployment works better here since we only want a single PVC for the entire test.
+USE_STATEFULSET: false
+
+# Parallelstore instance provisioning needs VPC peering with servicenetworking.googleapis.com
+NEEDS_VPC_PEERING: true
+NEEDS_PARALLELSTORE_CLEANUP: true
+NETWORK_NAME: "perf-rapid-100"
+FIREWALL_RULE_NAME: "pscsi-firewall-rule"
+IP_RANGE_NAME: "pscsi-ip-range"

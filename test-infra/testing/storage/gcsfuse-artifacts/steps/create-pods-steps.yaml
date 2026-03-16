@@ -1,0 +1,54 @@
+{{$namespaces := .namespaces}}
+{{$tuningSet := .tuningSet}}
+
+# Deployments
+{{$deploymentSize := .deploymentSize}}
+{{$deploymentsPerNamespace := .deploymentsPerNamespace}}
+
+# GCS Fuse related parameters
+{{$GCS_FUSE_BUCKET_NAME := DefaultParam .CL2_GCS_FUSE_BUCKET_NAME "var CL2_GCS_FUSE_BUCKET_NAME was not supplied"}}
+{{$GCS_FUSE_ENABLE_METADATA_PREFETCH := DefaultParam .CL2_GCS_FUSE_ENABLE_METADATA_PREFETCH "false"}}
+{{$GCS_FUSE_DISABLE_METRICS := DefaultParam .CL2_GCS_FUSE_DISABLE_METRICS "true"}}
+{{$GCS_FUSE_SKIP_BUCKET_CHECK := DefaultParam .CL2_GCS_FUSE_SKIP_BUCKET_CHECK "false"}}
+
+## CL2 params
+{{$CHECK_IF_PODS_ARE_UPDATED := DefaultParam .CL2_CHECK_IF_PODS_ARE_UPDATED true}}
+
+steps:
+- name: Starting measurement for creation of GCS FUSE backed pods
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+      Params:
+        apiVersion: apps/v1
+        kind: Deployment
+        action: start
+        checkIfPodsAreUpdated: {{$CHECK_IF_PODS_ARE_UPDATED}}
+        labelSelector: group = load
+        operationTimeout: 400m
+- name: Creating GCS FUSE backed pods
+  phases:
+  - namespaceRange:
+      Min: 1
+      Max: 1
+      basename: "gcsfuse-scale-test"
+    ReplicasPerNamespace: 1
+    tuningSet: {{$tuningSet}}
+    objectBundle:
+    - basename: small-deployment
+      objectTemplatePath: deployment.yaml
+      templateFillMap:
+        Replicas: {{$deploymentSize}}
+        group: load
+        BUCKET_NAME: {{$GCS_FUSE_BUCKET_NAME}}
+        GCS_FUSE_DISABLE_METRICS: {{$GCS_FUSE_DISABLE_METRICS}}
+        GCS_FUSE_ENABLE_METADATA_PREFETCH: {{$GCS_FUSE_ENABLE_METADATA_PREFETCH}}
+        GCS_FUSE_SKIP_BUCKET_CHECK: {{$GCS_FUSE_SKIP_BUCKET_CHECK}}
+- name: Waiting for GCS FUSE backed pods to all start up
+  measurements:
+  - Method: WaitForControlledPodsRunning
+    Instances:
+    - Identifier: WaitForRunningDeployments
+      Params:
+        action: gather
