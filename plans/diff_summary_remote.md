@@ -15,13 +15,15 @@ On top of this Custom Resource transition, the local copy also introduces massiv
 
 ## Key Local Improvements Over the Remote Branch
 
-### 1. Robust Sandbox Discovery & Adoption (SandboxClaim Controller)
-The `getOrCreateSandbox` function has been completely overhauled to be incredibly resilient against state desyncs:
-1. **Status Check**: First tries returning the sandbox listed in the claim's status.
-2. **GUID Label Search**: Most robust approach - searches for a sandbox carrying the `SandboxIDLabel` matching the claim's UID. Crucially, if it finds a sandbox that lost owner references, it will dynamically **restore ownership** via patching.
-3. **Claim Name Fallback**: Tries fetching a sandbox with the same name as the claim (legacy behavior).
-4. **WarmPool Adoption**: Executes the `tryAdoptSandboxFromPool` strategy (collision-resistant).
-5. **Fresh Creation**: Falls back to creating a new sandbox.
+### 1. Robust Sandbox vs Pod Discovery & Adoption
+In the remote branch, the `SandboxClaim` controller searches for and adopts raw `Pod` instances from the `SandboxWarmPool` (e.g., using `getOrCreatePod`). The local branch completely abandons this approach:
+- **`getOrCreateSandbox` Replacment**: The controller is now designed to discover and adopt fully populated `v1alpha1.Sandbox` objects instead of Pods.
+- **Resilient Discovery Strategy**:
+  1. **Status Check**: First tries returning the sandbox listed in the claim's status.
+  2. **GUID Label Search**: Searches for a sandbox carrying the `SandboxIDLabel` matching the claim's UID. Crucially, if it finds a sandbox that lost owner references, it will dynamically **restore ownership** via patching.
+  3. **Claim Name Fallback**: Tries fetching a sandbox with the same name as the claim.
+  4. **WarmPool Adoption**: Executes the `tryAdoptSandboxFromPool` strategy to securely pluck a pre-warmed Sandbox.
+  5. **Fresh Creation**: Falls back to creating a new Sandbox resource.
 
 ### 2. Conflict-Free Status Updates
 Across the controllers (`sandbox_controller.go`, `sandboxclaim_controller.go`, `sandboxwarmpool_controller.go`), the status update mechanism was refactored.
