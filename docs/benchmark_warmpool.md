@@ -37,6 +37,24 @@ Analyzing the `SandbClaimReadyMS` high-resolution logs confirms excellent perfor
 - **Max:** 1075.00 ms
 - **Min:** 81.00 ms
 
+#### sandbox_claim_ready_latency_seconds Buckets (Cumulative/Log-derived)
+*Note: Calculated from controller logs (`SandbClaimReadyMS`) for the 300 claims.*
+
+| Bucket | Count |
+| :--- | :--- |
+| `<= 0.005s` | 0 |
+| `<= 0.01s` | 0 |
+| `<= 0.025s` | 0 |
+| `<= 0.05s` | 0 |
+| `<= 0.1s` | 2 |
+| `<= 0.25s` | 54 |
+| `<= 0.5s` | 135 |
+| `<= 1s` | 289 |
+| `<= 2.5s` | 300 |
+| `<= 5s` | 300 |
+| `<= 10s` | 300 |
+| `+Inf` | 300 |
+
 ## Analysis
 - The test completed successfully, deploying 600 claims in total and bringing them all to Ready status extremely fast.
 - The results demonstrate the controller's outstanding ability to handle high-volume bursts when a warm pool is available. Claims were fulfilled and marked as Ready almost instantly.
