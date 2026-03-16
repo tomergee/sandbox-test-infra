@@ -33,7 +33,20 @@ func (r *SandboxClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request
 ```
 
 ## 3. Add the Logging Statement
-Locate the `recordCreationLatencyMetric` method. It should calculate the exact time the status condition changed to `Ready` using `LastTransitionTime` instead of `time.Since()`, which avoids including the controller's queue waiting time:
+The `SandbClaimReadyMS` metric needs to measure the exact milliseconds between when the claim was requested (`CreationTimestamp`) and when it was definitively verified as ready by the API server. This is achieved using `time.Since(claim.CreationTimestamp.Time)`.
+
+First, locate the `Reconcile` method and ensure `recordCreationLatencyMetric` is called **AFTER** `updateStatus` so that we only log the latency when the status is successfully persisted to the cluster:
+
+```go
+	if updateErr := r.updateStatus(ctx, originalClaimStatus, claim); updateErr != nil {
+		return ctrl.Result{}, errors.Join(reconcileErr, updateErr)
+	}
+
+	// This is placed after updateStatus so that the measurement includes the successful persist to the API server
+	r.recordCreationLatencyMetric(ctx, claim, *originalClaimStatus, sandbox)
+```
+
+Then, in the `recordCreationLatencyMetric` method itself, add the JSON-formatted logging inside the block that checks the `readyClaims` map first:
 
 ```go
 func (r *SandboxClaimReconciler) recordCreationLatencyMetric(ctx context.Context, claim *extensionsv1alpha1.SandboxClaim, originalClaimStatus extensionsv1alpha1.SandboxClaimStatus, sandbox *v1alpha1.Sandbox) {
@@ -52,15 +65,12 @@ func (r *SandboxClaimReconciler) recordCreationLatencyMetric(ctx context.Context
 	// Record Prometheus Metric for SandboxClaim creation-to-ready latency
 	key := claim.Namespace + "/" + claim.Name
 	if _, loaded := r.readyClaims.LoadOrStore(key, true); !loaded {
-		readyTime := newReady.LastTransitionTime.Time
-		latency := readyTime.Sub(claim.CreationTimestamp.Time)
-		
-		latencySeconds := latency.Seconds()
+		latencySeconds := time.Since(claim.CreationTimestamp.Time).Seconds()
 		asmetrics.SandboxClaimReadyLatency.WithLabelValues(claim.Namespace).Observe(latencySeconds)
 
 		// ADD THIS BLOCK: Record SandbClaimReadyMS log
 		log := log.FromContext(ctx)
-		log.Info("SandbClaimReadyMS", "namespace", claim.Namespace, "name", claim.Name, "latency_ms", latency.Milliseconds())
+		log.Info("SandbClaimReadyMS", "namespace", claim.Namespace, "name", claim.Name, "latency_ms", time.Since(claim.CreationTimestamp.Time).Milliseconds())
 	}
     // ... remainder of method
 }
