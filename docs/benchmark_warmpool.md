@@ -56,6 +56,24 @@ Analyzing the `SandbClaimReadyMS` high-resolution logs confirms excellent perfor
 | `<= 10s` | 300 |
 | `+Inf` | 300 |
 
+#### sandbox_claim_ready_latency_seconds Buckets (Prometheus Scraped)
+*Note: Scraped directly from the `agent-sandbox-controller` metrics endpoint. These represent cumulative counts across BOTH bursts (600 total).*
+
+| Bucket `le` | Cumulative Count |
+| :--- | :--- |
+| `0.005` | 0 |
+| `0.01` | 0 |
+| `0.025` | 0 |
+| `0.05` | 0 |
+| `0.1` | 1 |
+| `0.25` | 74 |
+| `0.5` | 222 |
+| `1.0` | 508 |
+| `2.5` | 600 |
+| `5.0` | 600 |
+| `10.0` | 600 |
+| `+Inf` | 600 |
+
 #### Raw Data Analysis (Resolution 1ms)
 Parsed from controller logs (`SandbClaimReadyMS`) for the 300 claims.
 
