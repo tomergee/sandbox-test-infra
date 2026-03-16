@@ -55,6 +55,13 @@ Analyzing the `SandbClaimReadyMS` high-resolution logs confirms excellent perfor
 | `<= 10s` | 300 |
 | `+Inf` | 300 |
 
+#### Raw Data Analysis (Resolution 1ms)
+Parsed from controller logs (`SandbClaimReadyMS`) for the 300 claims.
+
+| Metric | P50 | P90 | P99 | Average | Phase Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Claim Readiness** | 528.50ms | 834.00ms | 1049.06ms | 505.79ms | API Creation to Readiness |
+
 ## Analysis
 - The test completed successfully, deploying 600 claims in total and bringing them all to Ready status extremely fast.
 - The results demonstrate the controller's outstanding ability to handle high-volume bursts when a warm pool is available. Claims were fulfilled and marked as Ready almost instantly.
