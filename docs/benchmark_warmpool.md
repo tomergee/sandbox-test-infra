@@ -7,6 +7,7 @@
 ## Configuration
 - **Project:** `gke-ai-eco-dev`
 - **Cluster Name:** `agent-sandbox-burst`
+- **Node Instance Type:** `e2-standard-32`
 - **Cluster Strategy:** `agent-sandbox-warmpool-multiburst.yaml`
 - **Target Objects:** `SandboxWarmPool` & `SandboxClaim`
 - **Warm Pool Replicas:** 600
