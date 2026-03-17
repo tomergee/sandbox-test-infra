@@ -62,3 +62,8 @@ args:
 ## 7. Testing & Verification Plan
 - **Label Verification**: Deploy a `SandboxWarmPool`. Use `kubectl get sandboxes --show-labels`. Assert every child object possesses the exact pool name hash label.
 - **Throttling Verification**: Check the central apiserver logs and the controller logs using the `50x50` multiburst simulation script. Verify the string `Throttling request took...` does not appear.
+
+## 8. Affected Files
+- `extensions/controllers/sandboxwarmpool_controller.go`
+- `main.go` (Controller manager entrypoint)
+- `k8s/extensions.controller.yaml`

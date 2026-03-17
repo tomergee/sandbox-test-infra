@@ -48,3 +48,6 @@ If `DisableNetworkPolicy` is toggled **true**:
 ## 7. Testing & Verification Plan
 - **Verification of Logs**: Spin up a multi-claim load test and verify no `NetworkPolicy` creation errors are logged.
 - **E2E Curl Test**: Launch a `SandboxClaim` without the override flag. Exec into the assigned Sandbox pod and attempt to `curl 8.8.8.8` (should timeout). Attempt to `curl example.com` (DNS should resolve, but connection should timeout).
+
+## 8. Affected Files
+- `extensions/controllers/sandboxclaim_controller.go`

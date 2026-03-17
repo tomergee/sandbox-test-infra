@@ -44,3 +44,8 @@ Because a patch only delivers the *delta* of the specific fields changed, the AP
 ## 7. Testing & Verification Plan
 - **Verification of Logs**: Spin up a heavy test suite (e.g., 200 node scale) and physically `grep` the controller pod logs for the string `object has been modified`. The metric should drop to near zero.
 - **Metrics Aggregation**: Ensure the `reconciliation_errors_total` metric exposed by controller-runtime experiences a proportional drop under load.
+
+## 8. Affected Files
+- `controllers/sandbox_controller.go`
+- `extensions/controllers/sandboxclaim_controller.go`
+- `extensions/controllers/sandboxwarmpool_controller.go`

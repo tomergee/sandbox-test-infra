@@ -42,3 +42,7 @@ We propose replacing `getOrCreatePod` with a heavily fortified parent abstractio
 ## 7. Testing & Verification Plan
 - **Unit Tests**: Inject mock clients simulating split-brain (where a Sandbox exists with the correct GUID label but no OwnerReference) and assert the controller patches the ownership rather than creating a duplicate.
 - **E2E Multiburst Test**: Execute `test-e2e.sh` and a 100-node 10 QPS burst test. Verify via controller logs and Prometheus that the number of `Sandbox` objects created exactly matches the number of `SandboxClaims`, proving the Thundering Herd is mitigated.
+
+## 8. Affected Files
+- `extensions/controllers/sandboxclaim_controller.go`
+- `extensions/controllers/sandboxclaim_controller_test.go`

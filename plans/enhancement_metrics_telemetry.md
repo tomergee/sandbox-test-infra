@@ -49,3 +49,7 @@ To solve the re-queue overwrite issue, the controller requires local state manag
 ## 7. Testing & Verification Plan
 - **Duplicate Prevention Test**: Write a unit test that mocks a `SandboxClaim` transitioning to `Ready`, forces a manual requeue of the same object 5 seconds later, and asserts the metric incremented/fired only once.
 - **Log Scraping Verification**: Run a mini burst (10 claims) and ensure a Python regex parser can successfully trap exactly 10 instances of `SandbClaimReadyMS`.
+
+## 8. Affected Files
+- `internal/metrics/metrics.go`
+- `extensions/controllers/sandboxclaim_controller.go`
