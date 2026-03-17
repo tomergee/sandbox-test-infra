@@ -21,22 +21,30 @@ During multiburst load testing, two major bottlenecks emerged in the legacy arch
 
 ## 4. Proposal / Architecture
 
-### 4.1 Metadata Inheritance
+### 4.1 Metadata Inheritance & Tracking
 The `SandboxWarmPool` controller will strictly enforce `poolLabel` injection mapping.
-1. When iterating over the `SandboxTemplate`, calculate the unique hash: `NameHash(warmPool.Name)`.
-2. Explicitly map this identifier to the generated Sandbox's `.Spec.PodTemplate.ObjectMeta.Labels`.
-3. This guarantees any child generated from that pool retains a permanent, queryable link back.
+1. When iterating over the `SandboxTemplate`, calculate the unique hash identifier using the pool's name: `NameHash(warmPool.Name)`.
+2. Explicitly inject this `poolLabel: $hash` mapping into the generated remote Sandbox's `.Spec.PodTemplate.ObjectMeta.Labels`.
 
-### 4.2 CLI Flag Orchestration
-We will introduce specific command-line arguments to `main.go` that directly configure the `ctrl.Options{}` block of the Manager.
+**Tracking & Performance Improvements:**
+- Without this label, dynamcally spun-up Sandboxes became completely orphaned in the cluster. Child execution environments had no metadata tying them back to their parent Warm Pool.
+- This propagation directly enables the robust **Sandbox Discovery** algorithm used by `SandboxClaims` to avoid the Thundering Herd. A claim can now use label selectors (e.g., `agent-sandbox-pool-hash=XYZ`) to deterministically query and lease pods belonging exclusively to the target pool.
+
+### 4.2 CLI Flag Orchestration & Work Queue Concurrency
+We will introduce specific command-line arguments to `main.go` that directly configure the `ctrl.Options{}` block of the Manager and the `rest.Config`.
 - `--sandbox-concurrent-workers`
 - `--sandbox-claim-concurrent-workers`
 - `--sandbox-warm-pool-concurrent-workers`
-- `--kube-api-qps`
-- `--kube-api-burst`
+- `--kube-api-qps` (API Requests Per Second)
+- `--kube-api-burst` (Max Instantaneous API Burst)
 
 Inside `SetupWithManager`, each specific controller will absorb its respective worker count config:
 `WithOptions(controller.Options{MaxConcurrentReconciles: concurrentWorkers})`
+
+**Tracking & Performance Improvements:**
+- **Legacy Bottleneck:** By default, Kubernetes controllers utilize very conservative client-go rate limits (e.g., 20 QPS / 30 Burst) and minimal single-digit concurrent reconciliation worker threads. If a burst of 50 `SandboxClaims` arrives simultaneously, the controller queues them and processes them practically single-file, artificially inflating wait times to several seconds.
+- **The Enhancement:** Raising the worker count to 300 per subsystem and pushing the API limits to 300 QPS / 450 Burst literally allows the controller to process an entire 50-claim burst in parallel simultaneously. 
+- **The Result:** The controller no longer rate-limits itself or starves waiting claims. This enhancement reduced the P50 multi-burst pod adoption latency to ~535ms because 50 simultaneous requests simply get assigned 50 independent parallel worker threads immediately.
 
 ### 4.3 Production Manifest Tuning
 Update the hardcoded arguments in `k8s/extensions.controller.yaml`:
