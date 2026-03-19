@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <testsuite name="ClusterLoaderV2" tests="0" failures="0" errors="0" time="124.591">
+      <testcase name="agent-sandbox-warmpool-multiburst overall (../../branches/sandboxclaim-perf-improvements/dev/load-test/agent-sandbox-warmpool-multiburst.yaml)" classname="ClusterLoaderV2" time="124.561747574"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 01] Start Startup Latency Measurement [00] - SandboxStartupLatency" classname="ClusterLoaderV2" time="0.528258116"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 02] Setup Sandbox Template" classname="ClusterLoaderV2" time="0.371684728"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 03] Setup Sandbox Warm Pool" classname="ClusterLoaderV2" time="0.162506006"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 04] Wait for Warm Pool Pods to be Ready [00] - WaitForWarmPoolPods" classname="ClusterLoaderV2" time="40.416929154"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 05] Sleep to ensure warm pods are ready [00] - SleepForPods" classname="ClusterLoaderV2" time="30.113960387"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 06] Create Sandbox Claims Burst 1" classname="ClusterLoaderV2" time="5.06323055"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 07] Wait for Sandbox Claims Burst 1 to be Ready [00] - WaitForSandboxClaims-1" classname="ClusterLoaderV2" time="0.537726229"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 08] Sleep between bursts [00] - SleepBetweenBursts" classname="ClusterLoaderV2" time="20.113725165"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 09] Create Sandbox Claims Burst 2" classname="ClusterLoaderV2" time="5.05493014"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 10] Wait for Sandbox Claims Burst 2 to be Ready [00] - WaitForSandboxClaims-2" classname="ClusterLoaderV2" time="0.655007181"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 11] Pause for Data Collection [00] - WaitAfterReady" classname="ClusterLoaderV2" time="15.114933853"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 12] Gather Results [00] - SandboxStartupLatency" classname="ClusterLoaderV2" time="0.510521171"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 13] Delete Sandbox Claims" classname="ClusterLoaderV2" time="5.256476565"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 14] Delete Sandbox Warm Pool" classname="ClusterLoaderV2" time="0.164081177"></testcase>
+      <testcase name="agent-sandbox-warmpool-multiburst: [step: 15] Delete Sandbox Templates" classname="ClusterLoaderV2" time="0.173701324"></testcase>
+  </testsuite>
