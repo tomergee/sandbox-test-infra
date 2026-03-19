@@ -1,0 +1,274 @@
+name: agent-sandbox-warmpool-multiburst
+dependencies: []
+automanagednamespaces: 0
+namespace:
+  number: 1
+  prefix: agent-sandbox-test
+  deletestalenamespaces: false
+  deleteautomanagednamespaces: false
+  enableexistingnamespaces: true
+  deletenamespacetimeout: 600000000000
+steps:
+- phases: []
+  measurements:
+  - method: PodStartupLatency
+    params:
+      action: start
+      labelSelector: extensions.agents.x-k8s.io/sandbox-id
+    identifier: SandboxStartupLatency
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Start Startup Latency Measurement
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 1
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: template
+      objecttemplatepath: cluster-loader-sandbox-template.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Setup Sandbox Template
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 1
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: warmpool
+      objecttemplatepath: cluster-loader-sandbox-warmpool.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Setup Sandbox Warm Pool
+- phases: []
+  measurements:
+  - method: WaitForRunningPods
+    params:
+      action: start
+      desiredPodCount: 600
+      labelSelector: agents.x-k8s.io/pool
+    identifier: WaitForWarmPoolPods
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Wait for Warm Pool Pods to be Ready
+- phases: []
+  measurements:
+  - method: Sleep
+    params:
+      duration: 30s
+    identifier: SleepForPods
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Sleep to ensure warm pods are ready
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 300
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: agent-claim-1
+      objecttemplatepath: cluster-loader-sandbox-claim.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Create Sandbox Claims Burst 1
+- phases: []
+  measurements:
+  - method: WaitForGenericK8sObjects
+    params:
+      action: start
+      failedConditions: []
+      maxFailedObjectCount: 0
+      minDesiredObjectCount: 300
+      namespaceRange:
+        max: 1
+        min: 1
+      objectGroup: extensions.agents.x-k8s.io
+      objectResource: sandboxclaims
+      objectVersion: v1alpha1
+      refreshInterval: 20ms
+      successfulConditions:
+      - Ready=True
+      timeout: 10m
+    identifier: WaitForSandboxClaims-1
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Wait for Sandbox Claims Burst 1 to be Ready
+- phases: []
+  measurements:
+  - method: Sleep
+    params:
+      duration: 20s
+    identifier: SleepBetweenBursts
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Sleep between bursts
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 300
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: agent-claim-2
+      objecttemplatepath: cluster-loader-sandbox-claim.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Create Sandbox Claims Burst 2
+- phases: []
+  measurements:
+  - method: WaitForGenericK8sObjects
+    params:
+      action: start
+      failedConditions: []
+      maxFailedObjectCount: 0
+      minDesiredObjectCount: 600
+      namespaceRange:
+        max: 1
+        min: 1
+      objectGroup: extensions.agents.x-k8s.io
+      objectResource: sandboxclaims
+      objectVersion: v1alpha1
+      refreshInterval: 20ms
+      successfulConditions:
+      - Ready=True
+      timeout: 10m
+    identifier: WaitForSandboxClaims-2
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Wait for Sandbox Claims Burst 2 to be Ready
+- phases: []
+  measurements:
+  - method: Sleep
+    params:
+      duration: 15s
+    identifier: WaitAfterReady
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Pause for Data Collection
+- phases: []
+  measurements:
+  - method: PodStartupLatency
+    params:
+      action: gather
+      labelSelector: extensions.agents.x-k8s.io/sandbox-id
+    identifier: SandboxStartupLatency
+    instances: []
+  module:
+    path: ""
+    params: {}
+  name: Gather Results
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 0
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: agent-claim-1
+      objecttemplatepath: cluster-loader-sandbox-claim.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+    - basename: agent-claim-2
+      objecttemplatepath: cluster-loader-sandbox-claim.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Delete Sandbox Claims
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 0
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: warmpool
+      objecttemplatepath: cluster-loader-sandbox-warmpool.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Delete Sandbox Warm Pool
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 0
+    tuningset: BurstCreate
+    objectbundle:
+    - basename: template
+      objecttemplatepath: cluster-loader-sandbox-template.yaml
+      templatefillmap: {}
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Delete Sandbox Templates
+tuningsets:
+- name: BurstCreate
+  initialdelay: 0
+  qpsload:
+    qps: 300
+  randomizedload: null
+  steppedload: null
+  timelimitedload: null
+  randomizedtimelimitedload: null
+  parallelismlimitedload: null
+  globalqpsload: null
+  poissonload: null
+chaosmonkey:
+  nodefailure: null
+  excludednodes: {}
