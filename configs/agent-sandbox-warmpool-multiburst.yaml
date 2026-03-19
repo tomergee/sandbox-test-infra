@@ -41,21 +41,13 @@ steps:
     - basename: warmpool
       objectTemplatePath: "cluster-loader-sandbox-warmpool.yaml"
 
-- name: Wait for Warm Pool Pods to be Ready
-  measurements:
-  - Identifier: WaitForWarmPoolPods
-    Method: WaitForRunningPods
-    Params:
-      action: start
-      labelSelector: "agents.x-k8s.io/pool"
-      desiredPodCount: {{MultiplyInt (DefaultParam .CL2_WARM_POOL_REPLICAS 20) $namespaces}}
 
 - name: Sleep to ensure warm pods are ready
   measurements:
   - Identifier: SleepForPods
     Method: Sleep
     Params:
-      duration: 30s
+      duration: 80s
 
 - name: Create Sandbox Claims Burst 1
   phases:
