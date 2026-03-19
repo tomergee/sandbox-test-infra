@@ -10,6 +10,15 @@
 - **Target Objects:** `SandboxWarmPool` & `SandboxClaim`
 - **Burst Size:** 300 claims per burst (2 Bursts, 600 total)
 - **Namespace:** agent-sandbox-tomer-run23-1
+- **Controller Configuration:**
+    * args:
+        - "--leader-elect=true"
+        - "--extensions"
+        - "--sandbox-concurrent-workers=1000"
+        - "--sandbox-claim-concurrent-workers=1000"
+        - "--sandbox-warm-pool-concurrent-workers=1000"
+        - "--kube-api-qps=800"
+        - "--kube-api-burst=800"
 
 ## Results
 
