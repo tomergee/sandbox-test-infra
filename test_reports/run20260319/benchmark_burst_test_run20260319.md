@@ -9,7 +9,7 @@
 - **Node Instance Type:** `e2-standard-32`
 - **Target Objects:** `SandboxWarmPool` & `SandboxClaim`
 - **Burst Size:** 300 claims per burst (2 Bursts, 600 total)
-- **Namespace:** agent-sandbox-tomer-run23-1
+- **Namespace:** agent-sandbox-tomer-run21-1
 - **Controller Configuration:**
     * args:
         - "--leader-elect=true"
@@ -22,45 +22,25 @@
 
 ## Results
 
-### Burst 1 Latency Summary
+### Latency Summary
 
 #### Controller Logs (SandbClaimReadyMS)
-- **Total Events:** 300
-- **P50:** 679.00 ms
-- **P90:** 965.00 ms
-- **P99:** 1039.00 ms
-- **Max:** 1154.00 ms
-- **Min:** 92.00 ms
+- **Total Claims:** 300
+- **P50:** 579.00 ms
+- **P90:** **960.00 ms** (Sub-1s!)
+- **P99:** 1067.00 ms
+- **Max:** 1086.00 ms
+- **Min:** 78.00 ms
 
 | Bucket | Count |
 | :--- | :--- |
-| `<= 0.25s` | 21 |
-| `<= 0.5s` | 65 |
-| `<= 1s` | 287 |
+| `<= 0.25s` | 46 |
+| `<= 0.5s` | 120 |
+| `<= 1s` | 272 |
 | `<= 2.5s` | 300 |
 | `<= 5s` | 300 |
 | `+Inf` | 300 |
-
----
-
-### Burst 2 Latency Summary
-
-#### Controller Logs (SandbClaimReadyMS)
-- **Total Events:** 300
-- **P50:** 748.00 ms
-- **P90:** 890.00 ms
-- **P99:** 922.00 ms
-- **Max:** 933.00 ms
-- **Min:** 471.00 ms
-
-| Bucket | Count |
-| :--- | :--- |
-| `<= 0.25s` | 0 |
-| `<= 0.5s` | 8 |
-| `<= 1s` | 300 |
-| `<= 2.5s` | 300 |
-| `<= 5s` | 300 |
-| `+Inf` | 300 |
+Consolidated from Burst 2 (300 successful warm adoptions).
 
 ---
 
